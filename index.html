@@ -37,6 +37,10 @@
   #weapon .combo{font-size:12px;font-weight:bold;letter-spacing:.12em}
   #weapon .slot b{display:inline-block;min-width:88px;border-bottom:1px solid var(--faint);
     text-align:left;padding-left:4px}
+  #weapon .vialh{display:inline-block;width:64px;height:6px;border:1px solid var(--faint);
+    vertical-align:middle;position:relative}
+  #weapon .vialh i{position:absolute;left:0;top:0;bottom:0;display:block;background:#9a7d18}
+  #swatchList{margin-top:4px;font-size:9px;letter-spacing:.06em;color:var(--faint);line-height:1.8}
 
   /* Controls hint, bottom-left */
   #hint{position:fixed;bottom:12px;left:16px;font-size:10px;letter-spacing:.05em;
@@ -51,6 +55,7 @@
   #stamp.show{opacity:.95;transform:translate(-50%,-50%) rotate(-2deg) scale(1)}
   #stamp.blue{border-color:var(--blue);color:var(--blue)}
   #stamp.purple{border-color:#6b3f78;color:#6b3f78}
+  #stamp.yellow{border-color:#8a6d10;color:#8a6d10}
 
   /* Re-shelving form overlay */
   #form{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
@@ -99,14 +104,17 @@
 <div id="meters">
   <div class="row" id="meterRed"><span class="lbl">VERMILION</span><span class="vial"><i></i></span></div>
   <div class="row" id="meterBlue"><span class="lbl">ULTRAMARINE</span><span class="vial"><i></i></span></div>
+  <div class="row" id="meterYellow"><span class="lbl">ORPIMENT</span><span class="vial"><i></i></span></div>
   <div class="row" id="meterPurple"><span class="lbl">TYRIAN</span><span class="vial"><i></i></span></div>
   <div class="row" id="meterRes"><span class="lbl">RESONANCE</span><span class="vial"><i></i></span></div>
   <div class="row" id="meterKiln"><span class="lbl">KILN</span><span class="vial"><i></i></span></div>
 </div>
 <div id="weapon">
   <div class="combo" id="comboName"></div>
+  <div class="heat" id="heatWrap" style="display:none"><span class="vialh"><i id="heatBar"></i></span> heat</div>
   <div class="slot">q · delivery <b id="slotD"></b></div>
   <div class="slot">e · payload&nbsp; <b id="slotP"></b></div>
+  <div id="swatchList"></div>
 </div>
 <div id="hint">wasd — move · mouse — aim · hold click — fire · space — dash · q/e — swap colors<br>touch: left half — move · right half — aim &amp; fire</div>
 <div id="stamp"></div>

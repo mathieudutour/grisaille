@@ -1,18 +1,26 @@
 "use strict";
 /* ============================================================
-   GRISAILLE — first playable slice
-   Prologue (The Inventory) → Vermilion's cold forge → the flip
-   → Ultramarine's flooded hatch → the two-slot grid, endless.
+   GRISAILLE — playable slice, v3
+   Hub → raids (bays → archive → objective) → back to the hub.
+
+   Arc: Prologue (The Inventory) → Vermilion's cold forge
+      → Ultramarine's flooded hatch → Orpiment's buried vault
+      → resonance reveals the Purple Kiln → the Firing → birth
+      → the Processing Floors (endless).
 
    Rendering: procedural watercolor on paper. No image assets.
    Systems from the design doc:
      §3.3 Payne is the darkest thing on screen, always
      §3.4 fissure glow IS the charge meter
-     §3.6 stains are permanent but dry (matte ceiling)
+     §3.6 stains are permanent but dry (hub stains persist forever)
      §4   shape signatures always legible; color is preattentive
      §7.2 pigment economy + cross-harvest (own-color resistance)
+     §7.3 swatches: per-run buffs to one slot of one color
+     §7.5 raid structure: bays, archives, the objective room
+     §7.6 the Firing: only the mix feeds the kiln
      §7.7 death is re-shelving; Working Stock floor
      §8   two slots: delivery × payload, colors mix in the barrel
+     §9   resonance: the mix is the key, not the reward
    ============================================================ */
 
 const cv = document.getElementById('c');
@@ -40,8 +48,8 @@ function css(c,a=1){ return `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`; }
 function mix(a,b,t){ return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
 function dark(c,f){ return [c[0]*f,c[1]*f,c[2]*f]; }
 
-/* the colors of the world — each with a live hue, a matte stain
-   ceiling (§3.6), and the grey it wears while still in storage */
+/* the colors of the world — live hue, matte stain ceiling (§3.6),
+   and the grey each wears while still in storage */
 const COLORS = {
   grey:{ live:[105,98,88],  stain:[128,122,112], grey:[105,98,88],
          warden:'—', tool:'STUMP',  payload:'TRACE', glow:[180,172,158] },
@@ -49,24 +57,26 @@ const COLORS = {
          warden:'VERMILION', tool:'BRUSH', payload:'BURN', glow:[255,90,50] },
   blue:{ live:[44,86,148],  stain:[96,112,140],  grey:[124,127,132],
          warden:'ULTRAMARINE', tool:'ROLLER', payload:'CHILL', glow:[90,140,255] },
+  yellow:{ live:[204,156,26], stain:[176,150,86], grey:[141,137,124],
+         warden:'ORPIMENT', tool:'QUILL', payload:'CHAIN', glow:[255,215,80] },
   /* purple is never liberated — it is FIRED at the kiln (§2.4, §7.6) */
   purple:{ live:[118,62,132], stain:[122,96,130], grey:[126,123,128],
          warden:'TYRIAN', tool:'COMPASS', payload:'SINGULARITY', glow:[210,130,255] },
 };
+const COLOR_ORDER=['red','blue','yellow','purple'];
 
 /* ---------- liberation state (persistent, §6) ---------- */
-const lib = { red:{on:false,t:0}, blue:{on:false,t:0}, purple:{on:false,t:0} };
+const lib = { red:{on:false,t:0}, blue:{on:false,t:0}, yellow:{on:false,t:0}, purple:{on:false,t:0} };
 function tint(c){ if(c==='grey') return COLORS.grey.live;
   return mix(COLORS[c].grey, COLORS[c].live, lib[c].t); }
 function stainTint(c){ if(c==='grey') return COLORS.grey.stain;
   return mix([150,145,135], COLORS[c].stain, lib[c].t); }
-function ownedColors(){ const o=[];
-  if(lib.red.on)o.push('red'); if(lib.blue.on)o.push('blue'); if(lib.purple.on)o.push('purple');
-  return o; }
+function ownedColors(){ return COLOR_ORDER.filter(c=>lib[c].on); }
 
 const SAVE_KEY='grisaille-save-v1';
-function save(){ try{ localStorage.setItem(SAVE_KEY,
-  JSON.stringify({red:lib.red.on, blue:lib.blue.on, purple:lib.purple.on})); }catch(e){} }
+function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify({
+  red:lib.red.on, blue:lib.blue.on, yellow:lib.yellow.on, purple:lib.purple.on,
+  resonance })); }catch(e){} }
 function loadSave(){ try{ return JSON.parse(localStorage.getItem(SAVE_KEY)||'null'); }catch(e){ return null; } }
 
 /* ---------- paper (cached) ---------- */
@@ -106,24 +116,35 @@ function makePaper(){
   for(let y=cell;y<H;y+=cell){ p.beginPath(); p.moveTo(0,y); p.lineTo(W,y); p.stroke(); }
 }
 
-/* ---------- persistent stains (§3.6: permanent, but dry) ---------- */
-let stains=null, stainCtx=null;
-function resizeStains(){
-  const old = stains;
-  stains=document.createElement('canvas');
-  stains.width=W*DPR; stains.height=H*DPR;
-  stainCtx=stains.getContext('2d'); stainCtx.scale(DPR,DPR);
-  if(old) stainCtx.drawImage(old,0,0,W,H);
+/* ---------- persistent stains (§3.6) ----------
+   The hub layer persists forever — the save file you can look at.
+   Each raid bay gets a fresh layer; it is that room's painting. */
+let hubStains=null, roomStains=null;
+function makeLayer(old){
+  const c=document.createElement('canvas');
+  c.width=W*DPR; c.height=H*DPR;
+  const g=c.getContext('2d'); g.scale(DPR,DPR);
+  if(old) g.drawImage(old,0,0,W,H);
+  return c;
 }
+function resizeStains(){
+  hubStains=makeLayer(hubStains);
+  roomStains=makeLayer(roomStains);
+}
+function clearRoomStains(){
+  roomStains=makeLayer(null);
+}
+function activeStains(){ return mode==='raid' ? roomStains : hubStains; }
 function splat(x,y,t,size,alpha){
+  const g=activeStains().getContext('2d');
   const n=5+(h1(x+y)*4|0);
   for(let i=0;i<n;i++){
     const a=h2(x+i,y)*Math.PI*2, d=h2(y+i,x)*size*.8;
     const px=x+Math.cos(a)*d, py=y+Math.sin(a)*d, r=size*(.35+h2(i,x+y)*.65);
-    stainCtx.beginPath();
-    blobPath(stainCtx, px,py, r, 9, (x*13+y*7+i*31)|0, .45);
-    stainCtx.fillStyle=css(t, alpha*(0.5+h1(i+x)*0.5));
-    stainCtx.fill();
+    g.beginPath();
+    blobPath(g, px,py, r, 9, (x*13+y*7+i*31)|0, .45);
+    g.fillStyle=css(t, alpha*(0.5+h1(i+x)*0.5));
+    g.fill();
   }
 }
 
@@ -169,6 +190,20 @@ function strataPath(c,x,y,r,rot,seed){
   c.closePath();
 }
 
+/* radiant spines — yellow's shape signature (§11.2) */
+function spinePath(c,x,y,r,rot,seed){
+  const pts=10;
+  for(let i=0;i<=pts*2;i++){
+    const k=i%(pts*2);
+    const a=rot+(k/(pts*2))*Math.PI*2;
+    const base=(k%2===0)? r*(0.9+h2(seed,k)*.3) : r*.18;
+    const rr=base+jit(seed,k,r*.07);
+    const px=x+Math.cos(a)*rr, py=y+Math.sin(a)*rr;
+    i===0?c.moveTo(px,py):c.lineTo(px,py);
+  }
+  c.closePath();
+}
+
 /* watercolor fill + misregistered boiling outline */
 function watercolor(c, pathFn, fill, edge, seed, opts={}){
   const mis = opts.mis ?? 2.5;
@@ -205,20 +240,40 @@ function blip(f,dur,type,vol){
 /* ============================================================
    WORLD STATE
    ============================================================ */
+let mode='title';           // title | hub | raid
+let raid=null;              // { act, room, state, endless }
+let hubDoors=[];            // entrances in the hub
+let door=null;              // exit door of a cleared bay
+let kiln=null, kilnTemp=0;
+let resonance=0;
+const RES_MAX=12;
+let killsTotal=0;
+let timescale=1, cineT=0;
+let reshelving=0, reportT=0, returnT=0;
+
 let crates=[];
 function makeCrates(){
   crates=[];
   const n = W<700?4:6;
   for(let i=0;i<n;i++){
     crates.push({ x:rand(W*.12,W*.88), y:rand(H*.15,H*.85),
-      w:rand(50,110), h:rand(40,90), seed:(i*97+13) });
+      w:rand(50,110), h:rand(40,90), seed:(Math.random()*9999)|0 });
+  }
+}
+let motes=[];
+function makeMotes(){
+  motes=[];
+  for(let i=0;i<(W<700?26:42);i++){
+    motes.push({ x:rand(0,W), y:rand(0,H), a:rand(0,7),
+      s:rand(.10,.32), r:rand(2.2,3.4), seed:i*31 });
   }
 }
 
 /* Payne, sediment */
 const player={ x:0,y:0, r:15, aim:0, hits:0, maxHits:6, fireT:0, seed:555,
   inv:0, dashT:0, dashCd:0, dashA:0,
-  charge:{red:1, blue:1, purple:1} };
+  heat:0, overheated:false, qT:0, beamT:0, beamA:0,
+  charge:{red:1, blue:1, yellow:1, purple:1} };
 
 /* fissure network across Payne's back — each seam is one color's meter (§3.4) */
 const fissures=[];
@@ -236,25 +291,10 @@ const fissures=[];
 /* the two-slot weapon (§8.2) */
 const slots={ delivery:'grey', payload:'grey' };
 
-let enemies=[], ebullets=[], pbullets=[], motes=[], drops=[], pulses=[], shake=0;
-let interactable=null;      // the cold forge / the flooded hatch / the kiln door
-let kiln=null;              // the Purple Kiln, once resonance reveals it (§9)
-let kilnTemp=0;
-let resonance=0;
-const RES_MAX=12;
-let phase='title';          // title → prologue → forge → act1 → vault → free
-                            //   → kilnRevealed → firing → birth → restored
-let killsPhase=0, killsTotal=0;
-let timescale=1, cineT=0;
-let reshelving=0, reportT=0;
-
-function makeMotes(){
-  motes=[];
-  for(let i=0;i<(W<700?26:42);i++){
-    motes.push({ x:rand(0,W), y:rand(0,H), a:rand(0,7),
-      s:rand(.10,.32), r:rand(2.2,3.4), seed:i*31 });
-  }
-}
+let enemies=[], ebullets=[], pbullets=[], drops=[], pulses=[], arcs=[], shake=0;
+let interactable=null;      // the objective in the current room
+let swatchDrops=[];         // the archive's offering
+let swatches=[];            // the per-run build (§7.3)
 
 /* ============================================================
    ENEMIES — the Conservation Staff, then the guilds
@@ -281,36 +321,28 @@ function spawnEnemy(type,edge,px,py){
                           orbit:rand(170,300), dir:Math.random()<.5?1:-1 });
   if(type==='strata')  Object.assign(base,{ faction:'blue', r:18, hp:12, speed:34,
                           fireT:rand(2,4), ph:rand(0,7) });
+  if(type==='spine')   Object.assign(base,{ faction:'yellow', r:14, hp:8, speed:46,
+                          aimT:rand(1.5,3), locked:null, lockT:0 });
   if(type==='spiral')  Object.assign(base,{ faction:'purple', r:16, hp:10, speed:30,
                           fireT:rand(2,4), ph:rand(0,3.8), phased:false });
   enemies.push(base);
   return base;
 }
+function spawnSet(set){
+  for(const t in set) for(let i=0;i<set[t];i++) spawnEnemy(t,false);
+}
 
-/* wave maintenance per phase */
+/* waves are only maintained during the Firing (§7.6) — bays are clear-based */
 function desiredRoster(){
   const small = W<700;
-  const d = Math.min(1, killsTotal/120);           // slow escalation
-  switch(phase){
-    case 'prologue': return { plaster: small?4:6, husk:1 };
-    case 'forge':    return { plaster:3, husk:1, shard: small?4:5 };
-    case 'act1':     return { plaster:3, husk:1, shard: small?4:6 };
-    case 'vault':    return { plaster:2, husk:1, shard:3, strata: small?3:4 };
-    case 'free':
-    case 'kilnRevealed':
-                     return { plaster:2+Math.round(d*2), husk:1+Math.round(d),
-                              shard:3+Math.round(d*2), strata:2+Math.round(d*2) };
-    // the Firing (§7.6): both parent factions, in numbers, and nothing else
-    case 'firing':   return { shard: small?4:5, strata: small?4:5 };
-    case 'birth':    return { shard:2, strata:2 };
-    case 'restored': return { plaster:2+Math.round(d*2), husk:1+Math.round(d),
-                              shard:3+Math.round(d*2), strata:2+Math.round(d*2),
-                              spiral:2+Math.round(d*2) };
-  }
-  return {};
+  if(raid && raid.state==='firing') return { shard: small?4:5, strata: small?4:5 };
+  if(raid && raid.state==='birth')  return { shard:2, strata:2 };
+  return null;
 }
 function maintainWaves(){
-  const want=desiredRoster(), have={};
+  const want=desiredRoster();
+  if(!want) return;
+  const have={};
   for(const e of enemies) have[e.type]=(have[e.type]||0)+1;
   for(const t in want){
     let n=(want[t]||0)-(have[t]||0);
@@ -359,7 +391,7 @@ addEventListener('touchend',e=>{
 });
 
 function dash(){
-  if(player.dashCd>0 || phase==='title' || reshelving>0) return;
+  if(player.dashCd>0 || mode==='title' || reshelving>0) return;
   let mx=0,my=0;
   if(keys['w']||keys['arrowup'])my--; if(keys['s']||keys['arrowdown'])my++;
   if(keys['a']||keys['arrowleft'])mx--; if(keys['d']||keys['arrowright'])mx++;
@@ -375,17 +407,74 @@ function dash(){
 }
 
 /* ============================================================
+   SWATCHES — the per-run build (§7.3)
+   ============================================================ */
+const SWATCH_POOL=[
+  { id:'brush_pierce', color:'red',    slot:'delivery', name:'cinnabar grind',
+    desc:'brush dabs pierce' },
+  { id:'burn_long',    color:'red',    slot:'payload',  name:'slow roast',
+    desc:'burn lasts longer' },
+  { id:'splash_big',   color:'blue',   slot:'delivery', name:'heavy body',
+    desc:'roller splash wider' },
+  { id:'chill_fast',   color:'blue',   slot:'payload',  name:'deep chill',
+    desc:'chill stacks faster' },
+  { id:'quill_cool',   color:'yellow', slot:'delivery', name:'tempered nib',
+    desc:'quill overheats slower' },
+  { id:'chain_more',   color:'yellow', slot:'payload',  name:'long arc',
+    desc:'chain jumps further' },
+  { id:'bolt_dmg',     color:'purple', slot:'delivery', name:'true north',
+    desc:'compass hits harder' },
+  { id:'sing_wide',    color:'purple', slot:'payload',  name:'event horizon',
+    desc:'singularity pulls wider' },
+];
+function sw(id){ return swatches.find(s=>s.id===id)||null; }
+function swMag(id,base,perm,fug){
+  const s=sw(id); return !s ? base : (s.fugitive ? fug : perm);
+}
+function offerSwatches(){
+  swatchDrops=[];
+  const owned=ownedColors();
+  const pool=SWATCH_POOL.filter(p=>owned.includes(p.color) && !sw(p.id));
+  for(let i=pool.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [pool[i],pool[j]]=[pool[j],pool[i]]; }
+  const n=Math.min(3,pool.length);
+  for(let i=0;i<n;i++){
+    swatchDrops.push({ def:pool[i], fugitive:Math.random()<.4,
+      x:W/2+(i-(n-1)/2)*120, y:H/2, seed:(Math.random()*999)|0 });
+  }
+}
+function pickSwatch(sd){
+  swatches.push({ id:sd.def.id, name:sd.def.name, color:sd.def.color,
+    fugitive:sd.fugitive, life:sd.fugitive?100:Infinity });
+  splat(sd.x,sd.y,stainTint(sd.def.color),8,.14);
+  swatchDrops=[];               // the rest are re-filed
+  blip(660,.15,'sine',.05); blip(880,.2,'sine',.04);
+  updateWeaponHud();
+}
+function updateSwatches(dt){
+  let changed=false;
+  for(const s of swatches){
+    if(s.fugitive){ s.life-=dt; if(s.life<=0) changed=true; }
+  }
+  if(changed){
+    swatches=swatches.filter(s=>s.life>0);   // fugitive pigment fades in the light
+    blip(300,.3,'sine',.04);
+    updateWeaponHud();
+  }
+}
+
+/* ============================================================
    THE WEAPON — two slots, any color (§8)
    ============================================================ */
 const DELIVERY={
   grey:  { rate:7,  cost:0 },
   red:   { rate:10, cost:.012 }, // Brush — rapid stream, short range
   blue:  { rate:2.3,cost:.035 }, // Roller — arcing lob, splash
-  purple:{ rate:3.5,cost:.028 }, // Compass — phase bolt, pierces everything in a line
+  yellow:{ rate:0,  cost:.006 }, // Quill — hitscan beam, overheats (cost per tick)
+  purple:{ rate:3.5,cost:.028 }, // Compass — phase bolt, pierces a line
 };
 function cycleSlot(which){
   const own=ownedColors();
-  if(own.length<2 || phase==='title') return;
+  if(own.length<2 || mode==='title') return;
   const cur=slots[which], i=own.indexOf(cur);
   slots[which]=own[(i+1)%own.length];
   blip(which==='delivery'?300:380,.06,'sine',.035);
@@ -414,49 +503,95 @@ function fireWeapon(){
     const maxR=360;
     let tx=mouse.x, ty=mouse.y;
     if(aimTouch){ tx=aimTouch.x; ty=aimTouch.y; }
-    const dx=tx-player.x, dy=ty-player.y, dist=Math.min(maxR,Math.hypot(dx,dy)||1);
+    const dist=Math.min(maxR,Math.hypot(tx-player.x,ty-player.y)||1);
     const a=player.aim;
     pbullets.push({ kind:'lob', x:player.x, y:player.y,
       sx:player.x, sy:player.y,
       tx:player.x+Math.cos(a)*dist, ty:player.y+Math.sin(a)*dist,
-      t:0, T:.62, dmg:mono?5:3, splash:60, col, mono,
+      t:0, T:.62, dmg:mono?5:3, splash:60*swMag('splash_big',1,1.45,1.8), col, mono,
       dCost:mono?spec.cost*2:spec.cost, pCost:.02, seed:(Math.random()*999)|0 });
     blip(150,.1,'sine',.03);
   } else if(d==='purple'){
     const a=player.aim+rand(-.03,.03);
     pbullets.push({ kind:'bolt', x:player.x+Math.cos(a)*16, y:player.y+Math.sin(a)*16,
       vx:Math.cos(a)*620, vy:Math.sin(a)*620,
-      life:.5, dmg:mono?2.2:1.3, col, mono, hitList:[],
+      life:.5, dmg:(mono?2.2:1.3)*swMag('bolt_dmg',1,1.6,2), col, mono, hitList:[],
       dCost:mono?spec.cost*2:spec.cost, pCost:.01, seed:(Math.random()*999)|0 });
     blip(500,.07,'sine',.025);
   } else {
     const spread = d==='red'?.09:.05;
     const a=player.aim+rand(-spread,spread);
     const life = d==='red'?.6:1.4;
+    const pierce = d==='red' ? swMag('brush_pierce',1,2,3) : 1;
     pbullets.push({ kind:'dab', x:player.x+Math.cos(a)*16, y:player.y+Math.sin(a)*16,
       vx:Math.cos(a)*(d==='red'?460:430), vy:Math.sin(a)*(d==='red'?460:430),
-      life, dmg:mono?1.7:1, col, mono,
+      life, dmg:mono?1.7:1, col, mono, pierce, hitList:[],
       dCost:mono?spec.cost*2:spec.cost, pCost:.008, seed:(Math.random()*999)|0 });
     blip(d==='grey'?240:330,.05,'square',.02);
   }
   drainFor(pbullets[pbullets.length-1]);
 }
 
+/* the Quill (§8.3): instant beam, pierces the room, overheats fast */
+function quill(dt){
+  if(player.overheated || !chargeOk('yellow')){ if(!chargeOk('yellow')) blip(90,.04,'square',.01); return; }
+  player.qT-=dt;
+  if(player.qT>0) return;
+  player.qT=.08;
+  const mono = slots.payload==='yellow';
+  player.beamT=.09; player.beamA=player.aim;
+  const len=560;
+  const x1=player.x, y1=player.y, x2=x1+Math.cos(player.aim)*len, y2=y1+Math.sin(player.aim)*len;
+  const dmg=(mono?.9:.55);
+  for(const e of enemies){
+    if(e.dead||e.phased) continue;
+    // distance from enemy to beam segment
+    const t=Math.max(0,Math.min(1,((e.x-x1)*(x2-x1)+(e.y-y1)*(y2-y1))/(len*len)));
+    const px=x1+(x2-x1)*t, py=y1+(y2-y1)*t;
+    if(Math.hypot(e.x-px,e.y-py)<e.r){
+      hitEnemy(e,{kind:'ray', dmg, x:px, y:py});
+    }
+  }
+  player.heat=Math.min(1, player.heat+.07*swMag('quill_cool',1,.55,.35));
+  if(player.heat>=1){ player.overheated=true; blip(70,.4,'sawtooth',.04); }
+  const cost=mono?DELIVERY.yellow.cost*2:DELIVERY.yellow.cost;
+  player.charge.yellow=Math.max(0,player.charge.yellow-cost);
+  if(slots.payload!=='grey'&&slots.payload!=='yellow'&&chargeOk(slots.payload))
+    player.charge[slots.payload]=Math.max(0,player.charge[slots.payload]-.004);
+  blip(880+player.heat*300,.03,'square',.012);
+}
+
 /* payload on-hit effects (§8.4) */
 function applyPayload(e,strong,hx,hy,emitPulse=true){
   const p=slots.payload;
   if(p==='grey'||!chargeOk(p)) return;
-  if(p==='red'){ e.burn=Math.max(e.burn,2.5); }
+  if(p==='red'){ e.burn=Math.max(e.burn, swMag('burn_long',2.5,4,5.5)); }
   if(p==='blue'){
-    e.chill=Math.min(5, e.chill+(strong?2:1));
+    e.chill=Math.min(5, e.chill+(strong?2:1)+swMag('chill_fast',0,1,2));
     if(e.chill>=5 && e.frozen<=0){ e.frozen=1.3; blip(700,.15,'sine',.04); }
   }
   if(p==='purple' && emitPulse) singularity(hx,hy);
 }
 function singularity(x,y){
-  pulses.push({x,y,t:.35});
+  pulses.push({x,y,t:.35,r:130*swMag('sing_wide',1,1.55,2)});
   blip(240,.14,'sine',.03);
 }
+/* the Chain (§8.4): arcs to nearby targets */
+function chainFrom(e,dmg){
+  const jumps=2+swMag('chain_more',0,2,3);
+  const range=130+swMag('chain_more',0,40,60);
+  const targets=enemies
+    .filter(o=>!o.dead&&!o.phased&&o!==e&&Math.hypot(o.x-e.x,o.y-e.y)<range)
+    .sort((a,b)=>Math.hypot(a.x-e.x,a.y-e.y)-Math.hypot(b.x-e.x,b.y-e.y))
+    .slice(0,jumps);
+  for(const o of targets){
+    arcs.push({x1:e.x,y1:e.y,x2:o.x,y2:o.y,t:.12,seed:(Math.random()*999)|0});
+    o.hp-=dmg*.5*dmgMult(o); o.hurt=1;
+    if(o.hp<=0) killEnemy(o);
+  }
+  if(targets.length) blip(1200,.05,'square',.02);
+}
+
 /* own-color resistance (§11.1) — the cross-harvest driver */
 function dmgMult(e){
   let m=1;
@@ -471,13 +606,15 @@ function hitEnemy(e,b){
   e.hp-=dmg; e.hurt=1;
   // a lob emits one pulse at its landing point instead of one per enemy caught
   applyPayload(e, b.kind==='lob', b.x, b.y, b.kind!=='lob');
+  if(slots.payload==='yellow'&&chargeOk('yellow')) chainFrom(e,b.dmg);
   splat(b.x,b.y,stainTint(slots.payload!=='grey'?slots.payload:slots.delivery),4.5,.09);
   blip(dmgMult(e)<1?260:420,.04,'triangle',.02);
   if(e.hp<=0) killEnemy(e);
 }
 function killEnemy(e){
+  if(e.dead) return;
   e.dead=true;
-  killsPhase++; killsTotal++;
+  killsTotal++;
   splat(e.x,e.y,stainTint(e.faction),e.r*1.5,.16);
   shake=Math.max(shake,.15);
   blip(560,.12,'triangle',.04);
@@ -494,22 +631,22 @@ function killEnemy(e){
     drops.push({x:e.x, y:e.y, color:c, life:9, seed:e.seed});
   }
   // resonance (§9): purple-tinted kills reveal the kiln
-  if(phase==='free' && isMixedRB()){
-    resonance++;
-    if(resonance>=RES_MAX){ phase='kilnRevealed'; placeInteractable('kiln'); blip(495,.3,'sine',.05); }
+  if(isMixedRB() && !lib.purple.on){
+    resonance=Math.min(RES_MAX,resonance+1); save();
+    if(resonance>=RES_MAX && mode==='hub') buildHub();
   }
   // the Firing (§7.6): only kills made with the target mix feed the kiln
-  if(phase==='firing' && isMixedRB()){
+  if(raid && raid.state==='firing' && isMixedRB()){
     kilnTemp=Math.min(1,kilnTemp+.075);
     blip(620,.08,'sine',.03);
   }
   // the birth phase ends when the player survives their own creation
   if(e.birth && !enemies.some(o=>o!==e && !o.dead && o.birth)){
     liberate('purple');
-    phase='restored'; killsPhase=0;
     if(kiln){ splat(kiln.x,kiln.y,stainTint('purple'),44,.2); }
+    if(raid) raid.state='done';
+    returnT=3;
   }
-  checkPhase();
 }
 function isMixedRB(){
   return (slots.delivery==='red'&&slots.payload==='blue') ||
@@ -525,27 +662,49 @@ const formEl=document.getElementById('form'), formText=document.getElementById('
 const weaponEl=document.getElementById('weapon');
 const comboEl=document.getElementById('comboName');
 const slotDEl=document.getElementById('slotD'), slotPEl=document.getElementById('slotP');
+const heatWrap=document.getElementById('heatWrap'), heatBar=document.getElementById('heatBar');
+const swatchListEl=document.getElementById('swatchList');
 const meterRows={ red:document.querySelector('#meterRed'), blue:document.querySelector('#meterBlue'),
-  purple:document.querySelector('#meterPurple') };
+  yellow:document.querySelector('#meterYellow'), purple:document.querySelector('#meterPurple') };
 const resRow=document.querySelector('#meterRes'), kilnRow=document.querySelector('#meterKiln');
 
+const ACT_LABEL={
+  red:'THE INVENTORY', blue:'VAULT OF ULTRAMARINE',
+  yellow:'THE BURIED VAULT', purple:'THE UNACCESSIONED TERRITORY',
+  endless:'THE PROCESSING FLOORS',
+};
 function objectiveText(){
-  switch(phase){
-    case 'prologue': return `locate the cold forge — ${Math.min(killsPhase,QUOTA.prologue)}/${QUOTA.prologue} processed`;
-    case 'forge':    return 'the forge is exposed. touch it.';
-    case 'act1':     return `locate the flooded hatch — ${Math.min(killsPhase,QUOTA.act1)}/${QUOTA.act1} processed`;
-    case 'vault':    return 'the hatch is open. enter.';
-    case 'free':     return `fire mixed pigment — resonance ${resonance}/${RES_MAX}`;
-    case 'kilnRevealed': return 'the kiln stands in unaccessioned territory. light it.';
-    case 'firing':   return `HOLD THE MIX — kiln at ${Math.round(kilnTemp*100)}%`;
-    case 'birth':    return 'the first purple things. survive your creation.';
-    case 'restored': return `restoration ongoing — ${killsTotal} accessions struck`;
+  if(mode==='hub'){
+    if(!lib.red.on) return 'report to the inventory';
+    if(!lib.blue.on) return 'the vault of ultramarine stands open';
+    if(!lib.yellow.on) return 'the buried vault is catalogued. dig.';
+    if(!lib.purple.on) return resonance>=RES_MAX
+      ? 'the kiln is revealed. enter the unaccessioned territory.'
+      : `fire mixed red+blue pigment — resonance ${resonance}/${RES_MAX}`;
+    return `restoration ongoing — ${killsTotal} accessions struck`;
+  }
+  if(!raid) return 'awaiting accession';
+  const alive=enemies.filter(e=>!e.dead).length;
+  const bay=raid.endless?`processing floor ${raid.room+1}`:`bay ${raid.room+1}`;
+  switch(raid.state){
+    case 'combat':  return `${bay} — ${alive} to process`;
+    case 'cleared': return `${bay} processed. proceed.`;
+    case 'archive': return 'archive — select one swatch, or proceed';
+    case 'objective':
+      if(raid.act==='red') return 'the forge is exposed. touch it.';
+      if(raid.act==='blue') return 'the hatch is open. enter.';
+      if(raid.act==='yellow') return 'the buried door. unearth it.';
+      if(raid.act==='purple') return 'the kiln. light it.';
+      return bay;
+    case 'firing':  return `HOLD THE MIX — kiln at ${Math.round(kilnTemp*100)}%`;
+    case 'birth':   return 'the first purple things. survive your creation.';
+    case 'done':    return 'accession complete. returning to storage.';
   }
   return 'awaiting accession';
 }
 function tyrianLine(){
   if(lib.purple.on) return 'FIRED — no record exists';
-  if(phase==='firing'||phase==='birth') return 'firing in progress';
+  if(raid&&(raid.state==='firing'||raid.state==='birth')) return 'firing in progress';
   return 'unfired — never existed';
 }
 function updateReport(){
@@ -557,6 +716,7 @@ OBJECT ......... figure, compacted pigment
 CONDITION ...... ${cond}
 VERMILION ...... ${lib.red.on?'RELEASED — in circulation':'in storage (grey)'}
 ULTRAMARINE .... ${lib.blue.on?'RELEASED — in circulation':'submerged (grey)'}
+ORPIMENT ....... ${lib.yellow.on?'RELEASED — in circulation':'buried (grey)'}
 TYRIAN ......... ${tyrianLine()}
 OBJECTIVE ...... ${objectiveText()}
 RECOMMENDATION . ${player.hits>=player.maxHits-1?'contain':'monitor'}`;
@@ -570,9 +730,13 @@ function updateWeaponHud(){
   slotPEl.textContent = COLORS[slots.payload].warden.toLowerCase();
   slotDEl.style.color = css(tint(slots.delivery));
   slotPEl.style.color = css(tint(slots.payload));
+  swatchListEl.innerHTML = swatches.map(s=>{
+    const life = s.fugitive ? ` (fugitive ${Math.max(0,s.life)|0}s)` : '';
+    return `<span style="color:${css(tint(s.color))}">■</span> ${s.name}${life}`;
+  }).join('<br>');
 }
 function updateMeters(){
-  for(const c of ['red','blue','purple']){
+  for(const c of COLOR_ORDER){
     const row=meterRows[c];
     row.classList.toggle('on', lib[c].on);
     if(lib[c].on){
@@ -581,23 +745,31 @@ function updateMeters(){
       bar.style.background=css(tint(c),.8);
     }
   }
-  resRow.classList.toggle('on', phase==='free');
-  if(phase==='free'){
+  const showRes = lib.blue.on && !lib.purple.on && resonance<RES_MAX;
+  resRow.classList.toggle('on', showRes);
+  if(showRes){
     const bar=resRow.querySelector('i');
     bar.style.width=(resonance/RES_MAX*100)+'%';
     bar.style.background=css(COLORS.purple.live,.6);
   }
-  kilnRow.classList.toggle('on', phase==='firing');
-  if(phase==='firing'){
+  const showKiln = raid&&raid.state==='firing';
+  kilnRow.classList.toggle('on', !!showKiln);
+  if(showKiln){
     const bar=kilnRow.querySelector('i');
     bar.style.width=(kilnTemp*100)+'%';
     bar.style.background=css(COLORS.purple.live,.85);
   }
+  const showHeat = slots.delivery==='yellow';
+  heatWrap.style.display = showHeat?'block':'none';
+  if(showHeat){
+    heatBar.style.width=(player.heat*100)+'%';
+    heatBar.style.background = player.overheated ? css(COLORS.red.live,.8) : '#9a7d18';
+  }
 }
 function showStamp(color,lines,dur){
   stampEl.textContent=lines;
-  stampEl.classList.remove('blue','purple');
-  if(color==='blue'||color==='purple') stampEl.classList.add(color);
+  stampEl.classList.remove('blue','purple','yellow');
+  if(color==='blue'||color==='purple'||color==='yellow') stampEl.classList.add(color);
   stampEl.classList.add('show');
   setTimeout(()=>stampEl.classList.remove('show'), dur||2600);
 }
@@ -606,52 +778,132 @@ function showStamp(color,lines,dur){
 function reshelve(){
   splat(player.x,player.y,[45,40,36],26,.28);       // the dark mark stays (§3.6)
   reshelving=2.2;
+  const offsite = mode==='raid' ? 'recovered off-site  ☑' : 'recovered on-site, aisle B-3';
   formText.innerHTML =
-`<b>RE-SHELVING FORM</b>\nOBJECT ......... figure, compacted pigment\nRECOVERED ...... on-site, aisle B-3\nCARRIED PIGMENT  forfeited above working stock\nWORKING STOCK .. issued (standard)\nFILED BY ....... L.H.`;
+`<b>RE-SHELVING FORM</b>\nOBJECT ......... figure, compacted pigment\nRECOVERED ...... ${offsite}\nCARRIED PIGMENT  forfeited above working stock\nSWATCHES ....... returned to the drawer\nWORKING STOCK .. issued (standard)\nFILED BY ....... L.H.`;
   formEl.style.display='flex';
-  player.hits=0; player.x=W/2; player.y=H/2;
+  player.hits=0;
   // Working Stock: re-shelving refills every owned color to the floor.
   for(const c of ownedColors()) player.charge[c]=Math.max(player.charge[c],.55);
-  ebullets=[]; drops=[]; pulses=[];
-  // failure at the kiln (§7.6): retrieval is also procedure — the kiln cools
-  if(phase==='firing'||phase==='birth'){
-    phase='kilnRevealed'; kilnTemp=0; interactable=kiln;
-    for(const e of enemies) if(e.birth) e.dead=true;
-  }
+  swatches=[];                    // the per-run build is forfeit
+  player.heat=0; player.overheated=false;
   blip(140,.5,'sine',.06);
-  updateReport();
   setTimeout(()=>formEl.style.display='none',2200);
+  enterHub();                     // the staff carry Payne back to storage
+  updateReport(); updateWeaponHud();
 }
 
 /* ============================================================
-   PHASES & LIBERATION
+   HUB & RAIDS (§7.5)
    ============================================================ */
-const QUOTA={ prologue:10, act1:15 };
-
-function placeInteractable(kind){
-  let x,y,tries=0;
-  if(kind==='kiln'){
-    // the unaccessioned territory: the kiln sits near an edge, outside the tidy aisles
-    const corner=[[.12,.15],[.88,.15],[.12,.85],[.88,.85]][Math.random()*4|0];
-    x=W*corner[0]+rand(-30,30); y=H*corner[1]+rand(-30,30);
-  } else {
-    do{ x=rand(W*.2,W*.8); y=rand(H*.2,H*.8); tries++; }
-    while(Math.hypot(x-player.x,y-player.y)<260 && tries<40);
+function clearField(){
+  enemies=[]; ebullets=[]; pbullets=[]; drops=[]; pulses=[]; arcs=[];
+  interactable=null; door=null; kiln=null; swatchDrops=[];
+}
+function enterHub(){
+  mode='hub'; raid=null; returnT=0;
+  clearField();
+  swatches=[];                  // the per-run build ends with the run (§7.3)
+  makeCrates(); makeMotes();
+  player.x=W/2; player.y=H*.72;
+  buildHub();
+  updateReport(); updateWeaponHud();
+}
+function buildHub(){
+  hubDoors=[];
+  const acts=[];
+  if(!lib.red.on) acts.push('red');
+  else if(!lib.blue.on) acts.push('blue');
+  else if(!lib.yellow.on) acts.push('yellow');
+  else {
+    acts.push('endless');
+    if(!lib.purple.on && resonance>=RES_MAX) acts.push('purple');
   }
-  interactable={ kind, x, y, r:kind==='kiln'?30:26, seed:(Math.random()*999)|0, pulse:0 };
-  if(kind==='kiln'){ kiln=interactable; return; }
+  acts.forEach((act,i)=>{
+    hubDoors.push({ act, x:W*(.5+(i-(acts.length-1)/2)*.3), y:H*.3,
+      r:30, seed:(act.length*131+7)|0, pulse:0 });
+  });
+}
+function startRaid(act){
+  raid={ act, room:0, state:'combat', endless:act==='endless' };
+  loadRoom();
+  blip(392,.2,'sine',.04);
+}
+/* what lives in each bay */
+function roomPlan(act,room){
+  const small=W<700, s=small?-1:0;
+  if(act==='endless'){
+    if(room%4===3) return {type:'archive'};
+    const k=Math.floor(room/3);
+    return {type:'combat', set:{ plaster:3+k+s, husk:1+Math.floor(k/2),
+      shard:2+k+s, strata:2+k+s, spine:1+k+s, spiral:lib.purple.on?1+Math.floor(k/2):0 }};
+  }
+  const plans={
+    red:[ {type:'combat', set:{plaster:5+s,husk:1}},
+          {type:'combat', set:{plaster:7+s,husk:2}},
+          {type:'objective'} ],
+    blue:[ {type:'combat', set:{plaster:4+s,shard:4+s}},
+           {type:'combat', set:{plaster:3,husk:1,shard:5+s}},
+           {type:'archive'},
+           {type:'objective'} ],
+    yellow:[ {type:'combat', set:{plaster:3,shard:3+s,strata:3+s}},
+             {type:'combat', set:{shard:4+s,strata:4+s,husk:1}},
+             {type:'archive'},
+             {type:'objective'} ],
+    purple:[ {type:'combat', set:{shard:4+s,strata:4+s}},
+             {type:'combat', set:{shard:5+s,strata:5+s,spine:2}},
+             {type:'archive'},
+             {type:'objective'} ],
+  };
+  return plans[act][room]||null;
+}
+function loadRoom(){
+  clearField();
+  clearRoomStains();
+  makeCrates(); makeMotes();
+  player.x=60; player.y=H/2;
+  const plan=roomPlan(raid.act, raid.room);
+  if(!plan){ enterHub(); return; }
+  if(plan.type==='combat'){
+    raid.state='combat';
+    spawnSet(plan.set);
+  } else if(plan.type==='archive'){
+    raid.state='archive';
+    offerSwatches();
+    placeDoor();
+  } else if(plan.type==='objective'){
+    raid.state='objective';
+    placeObjective(raid.act);
+  }
+  updateReport();
+}
+function placeDoor(){
+  door={ x:W-36, y:H/2, r:26, seed:77 };
+}
+function nextRoom(){
+  raid.room++;
+  blip(494,.12,'sine',.04);
+  loadRoom();
+}
+function placeObjective(act){
+  const x=W*.72, y=H/2;
+  if(act==='purple'){
+    kiln={ x, y, r:30, seed:(Math.random()*999)|0 };
+    interactable={ kind:'kiln', x, y, r:30, seed:kiln.seed, pulse:0 };
+    // parents guard their kiln
+    for(let i=0;i<3;i++){ spawnEnemy('shard',false, x+rand(-180,-60), y+rand(-160,160));
+                          spawnEnemy('strata',false, x+rand(-180,-60), y+rand(-160,160)); }
+    return;
+  }
+  const kind = act==='red'?'forge' : act==='blue'?'hatch' : 'barrow';
+  interactable={ kind, x, y, r:26, seed:(Math.random()*999)|0, pulse:0 };
   // its keepers, still in storage, rendered grey — the crowd you cannot yet read (§4)
-  const guard = kind==='forge' ? 'shard' : 'strata';
+  const guard = act==='red'?'shard' : act==='blue'?'strata' : 'spine';
   const n = W<700?4:5;
   for(let i=0;i<n;i++){
     const a=(i/n)*Math.PI*2;
     spawnEnemy(guard,false, x+Math.cos(a)*130+rand(-20,20), y+Math.sin(a)*130+rand(-20,20));
   }
-}
-function checkPhase(){
-  if(phase==='prologue' && killsPhase>=QUOTA.prologue){ phase='forge'; placeInteractable('forge'); blip(440,.3,'sine',.05); }
-  if(phase==='act1' && killsPhase>=QUOTA.act1){ phase='vault'; placeInteractable('hatch'); blip(440,.3,'sine',.05); }
-  updateReport();
 }
 
 function liberate(color){
@@ -667,35 +919,54 @@ function liberate(color){
   showStamp(color, stampText, 3000);
   blip(520,.5,'sine',.06); blip(660,.8,'sine',.05);
   if(color==='blue') setTimeout(()=>blip(392,.8,'sine',.04),150);
+  if(color==='yellow') setTimeout(()=>blip(587,.7,'sine',.045),150);
   if(color==='purple') setTimeout(()=>blip(311,.9,'sine',.045),150);
   updateReport(); updateWeaponHud();
 }
 
-function touchInteractable(){
+function touchThings(){
+  // hub entrances
+  if(mode==='hub'){
+    for(const hd of hubDoors){
+      if(Math.hypot(player.x-hd.x,player.y-hd.y)<hd.r+player.r){
+        mode='raid'; startRaid(hd.act); return;
+      }
+    }
+    return;
+  }
+  if(!raid) return;
+  // bay exit door
+  if(door && Math.hypot(player.x-door.x,player.y-door.y)<door.r+player.r){
+    door=null; nextRoom(); return;
+  }
+  // archive offering
+  for(const sd of swatchDrops){
+    if(Math.hypot(player.x-sd.x,player.y-sd.y)<20+player.r){ pickSwatch(sd); break; }
+  }
+  // the objective
   if(!interactable) return;
   const d=Math.hypot(player.x-interactable.x, player.y-interactable.y);
   if(d>interactable.r+player.r) return;
   const kind=interactable.kind;
   if(kind==='kiln'){
-    // light it — the kiln stays in the world; the Firing begins
     interactable=null;
-    phase='firing'; kilnTemp=.2;
+    raid.state='firing'; kilnTemp=.2;
     showStamp('purple','THE FIRING\nonly the mix feeds the kiln', 2600);
     blip(392,.4,'sine',.05); blip(311,.6,'sine',.04);
     updateReport();
     return;
   }
-  splat(interactable.x,interactable.y, kind==='forge'?stainTint('red'):stainTint('blue'), 30,.2);
+  const color = kind==='forge'?'red' : kind==='hatch'?'blue' : 'yellow';
+  splat(interactable.x,interactable.y, stainTint(color), 30,.2);
   interactable=null;
-  killsPhase=0;
-  if(kind==='forge'){ liberate('red'); phase='act1'; }
-  else { liberate('blue'); phase='free'; }
-  updateReport();
+  liberate(color);
+  raid.state='done';
+  returnT=3;
 }
 
-/* the final minute of the Firing: the new color is born from the kiln, hostile (§7.6.5) */
+/* the final minute of the Firing: the new color is born, hostile (§7.6.5) */
 function birthPhase(){
-  phase='birth';
+  raid.state='birth';
   timescale=.25; cineT=1.4;
   splat(kiln.x,kiln.y,stainTint('purple'),40,.2);
   const n=5;
@@ -713,14 +984,18 @@ function birthPhase(){
    ============================================================ */
 function update(rdt,t){
   // liberation tint eases on unscaled time, so the world colors *through* the slow-mo
-  for(const c of ['red','blue'])
+  for(const c of COLOR_ORDER)
     lib[c].t += ((lib[c].on?1:0)-lib[c].t)*Math.min(1,rdt*2.2);
   boilFrame = Math.floor(t*8);
   if(cineT>0){ cineT-=rdt; if(cineT<=0) timescale=1; }
   const dt=rdt*timescale;
 
-  if(phase==='title') return;
+  if(mode==='title') return;
   if(reshelving>0){ reshelving-=rdt; return; }
+
+  reportT-=rdt; if(reportT<=0){ reportT=.3; updateReport();
+    if(swatches.some(s=>s.fugitive)) updateWeaponHud(); }
+  if(returnT>0){ returnT-=rdt; if(returnT<=0){ enterHub(); return; } }
 
   // -- player movement
   let mx=0,my=0;
@@ -747,27 +1022,46 @@ function update(rdt,t){
   let firing=false;
   if(aimTouch){ player.aim=Math.atan2(aimTouch.y-player.y,aimTouch.x-player.x); firing=true; }
   else { player.aim=Math.atan2(mouse.y-player.y,mouse.x-player.x); firing=mouse.down; }
-  player.fireT-=dt;
-  if(firing && player.fireT<=0) fireWeapon();
+  if(firing && slots.delivery==='yellow' && ownedColors().length){
+    quill(dt);
+  } else {
+    player.fireT-=dt;
+    if(firing && player.fireT<=0) fireWeapon();
+  }
+  // quill heat management
+  if(!(firing&&slots.delivery==='yellow')) player.heat=Math.max(0,player.heat-.5*dt);
+  else if(player.overheated) player.heat=Math.max(0,player.heat-.5*dt);
+  if(player.overheated && player.heat<.35) player.overheated=false;
+  player.beamT=Math.max(0,player.beamT-dt);
   // slow passive regen — drops are the real economy
   for(const c of ownedColors()) player.charge[c]=Math.min(1,player.charge[c]+.02*dt);
 
-  touchInteractable();
+  updateSwatches(dt);
+  touchThings();
   if(interactable) interactable.pulse+=dt;
+  for(const hd of hubDoors) hd.pulse+=dt;
 
   // -- the Firing (§7.6): the kiln cools unless fed with the mix
-  if(phase==='firing'){
+  if(raid && raid.state==='firing'){
     if(kilnTemp>=1) birthPhase();
     else {
       kilnTemp=Math.max(0,kilnTemp-.012*dt);
       if(kilnTemp<=0){
-        phase='kilnRevealed'; interactable=kiln;
+        raid.state='objective';
+        interactable={ kind:'kiln', x:kiln.x, y:kiln.y, r:30, seed:kiln.seed, pulse:0 };
         showStamp('purple','THE KILN COOLS\nlight it again', 2000);
         blip(120,.4,'sine',.05);
       }
     }
   }
-  reportT-=rdt; if(reportT<=0){ reportT=.3; updateReport(); }
+
+  // -- room cleared?
+  if(raid && raid.state==='combat' && !enemies.some(e=>!e.dead)){
+    raid.state='cleared';
+    placeDoor();
+    blip(523,.2,'sine',.05); blip(659,.3,'sine',.04);
+    updateReport();
+  }
 
   // -- enemies
   maintainWaves();
@@ -838,6 +1132,25 @@ function update(rdt,t){
         blip(95,.12,'sine',.02);
       }
     }
+    if(e.type==='spine'){
+      // Orpiment snipes from range and lights the player up (§3.2)
+      e.rot+=dt*.4;
+      if(d<340){ e.x-=dx/d*e.speed*slow*dt; e.y-=dy/d*e.speed*slow*dt; }
+      else if(d>460){ e.x+=dx/d*e.speed*.7*slow*dt; e.y+=dy/d*e.speed*.7*slow*dt; }
+      if(e.locked){
+        e.lockT-=dt*slow;
+        if(e.lockT<=0){
+          const a=Math.atan2(e.locked[1]-e.y, e.locked[0]-e.x);
+          ebullets.push({x:e.x,y:e.y,vx:Math.cos(a)*320,vy:Math.sin(a)*320,
+            life:3,kind:'sbolt',rot:a,spin:0,seed:(Math.random()*999)|0});
+          blip(1000,.08,'square',.02);
+          e.locked=null; e.aimT=rand(2.4,3.4);
+        }
+      } else {
+        e.aimT-=dt*slow;
+        if(e.aimT<=0 && d<W*.8){ e.locked=[player.x,player.y]; e.lockT=.65; blip(1400,.05,'sine',.015); }
+      }
+    }
     if(e.type==='spiral'){
       // Tyrian phases in and out (§3.2) — immaterial while phased out
       e.ph+=dt;
@@ -865,7 +1178,7 @@ function update(rdt,t){
   // -- enemy bullets
   for(const b of ebullets){
     b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt; b.rot+=b.spin*dt;
-    const rr = b.kind==='glob'?7 : b.kind==='dot'?4 : b.kind==='pbolt'?4.5 : 4.6;
+    const rr = b.kind==='glob'?7 : b.kind==='dot'?4 : b.kind==='pbolt'?4.5 : b.kind==='sbolt'?3.5 : 4.6;
     if(Math.hypot(b.x-player.x,b.y-player.y)<player.r-2+rr*.4){
       b.life=0; hurtPlayer();
     }
@@ -894,10 +1207,11 @@ function update(rdt,t){
     for(const e of enemies){
       if(e.dead || e.phased) continue;
       if(Math.hypot(b.x-e.x,b.y-e.y)<e.r){
-        if(b.kind==='bolt'){
-          // Compass: phases through — hits everything on the line, once each
+        if(b.kind==='bolt' || (b.kind==='dab'&&b.pierce>1)){
+          // pierces — hits everything on the line, once each
           if(b.hitList.includes(e)) continue;
           b.hitList.push(e); hitEnemy(e,b);
+          if(b.kind==='dab' && b.hitList.length>=b.pierce){ b.life=0; break; }
         } else {
           b.life=0; hitEnemy(e,b);
           break;
@@ -927,10 +1241,12 @@ function update(rdt,t){
     for(const e of enemies){
       if(e.dead||e.phased) continue;
       const dx=pu.x-e.x, dy=pu.y-e.y, dd=Math.hypot(dx,dy);
-      if(dd>4&&dd<130){ const s=Math.min(380*dt*(pu.t/.35), dd); e.x+=dx/dd*s; e.y+=dy/dd*s; }
+      if(dd>4&&dd<pu.r){ const s=Math.min(380*dt*(pu.t/.35), dd); e.x+=dx/dd*s; e.y+=dy/dd*s; }
     }
   }
   pulses=pulses.filter(p=>p.t>0);
+  for(const a of arcs) a.t-=dt;
+  arcs=arcs.filter(a=>a.t>0);
 
   // -- motes drift
   for(const m of motes){
@@ -957,7 +1273,7 @@ function render(t){
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.drawImage(paper,0,0,W,H);
   ctx.globalCompositeOperation='multiply';
-  ctx.drawImage(stains,0,0,W,H);
+  ctx.drawImage(activeStains(),0,0,W,H);
   ctx.globalCompositeOperation='source-over';
 
   if(shake>0) ctx.translate((Math.random()-.5)*shake*10,(Math.random()-.5)*shake*10);
@@ -977,9 +1293,13 @@ function render(t){
     }
   }
 
-  // the interactable — cold forge / flooded hatch / kiln
+  // hub entrances
+  if(mode==='hub') for(const hd of hubDoors) drawEntrance(hd,t);
+  // room fixtures
   if(kiln) drawKiln(t);
   if(interactable && interactable.kind!=='kiln') drawInteractable(interactable,t);
+  if(door) drawDoor(t);
+  for(const sd of swatchDrops) drawSwatchDrop(sd,t);
 
   // dust motes — the confusers
   for(const m of motes){
@@ -1001,6 +1321,11 @@ function render(t){
       ctx.fillStyle=css(mix([120,122,124],COLORS.blue.live,lib.blue.t), .5+lib.blue.t*.4); ctx.fill();
       if(lib.blue.t>.05){ ctx.beginPath(); ctx.arc(0,0,9,0,7);
         ctx.fillStyle=css(COLORS.blue.live,.1*lib.blue.t); ctx.fill(); }
+    } else if(b.kind==='sbolt'){
+      ctx.beginPath(); ctx.ellipse(0,0,10,1.6,0,0,7);
+      ctx.fillStyle=css(mix([130,126,112],COLORS.yellow.live,lib.yellow.t), .85); ctx.fill();
+      if(lib.yellow.t>.05){ ctx.beginPath(); ctx.arc(0,0,6,0,7);
+        ctx.fillStyle=css(COLORS.yellow.live,.14*lib.yellow.t); ctx.fill(); }
     } else if(b.kind==='pbolt'){
       ctx.beginPath();
       for(let a=0;a<Math.PI*3;a+=.5){
@@ -1019,10 +1344,45 @@ function render(t){
     ctx.restore();
   }
 
+  // spine telegraphs — the thin line that says "move"
+  for(const e of enemies){
+    if(e.type==='spine' && e.locked){
+      ctx.beginPath();
+      ctx.moveTo(e.x,e.y); ctx.lineTo(e.locked[0],e.locked[1]);
+      ctx.strokeStyle=css(tint('yellow'), .18+.25*(1-e.lockT/.65));
+      ctx.lineWidth=1; ctx.stroke();
+    }
+  }
+
   // enemies
   for(const e of enemies) drawEnemy(e);
 
-  // player bullets — pigment dabs & lobs
+  // the Quill beam
+  if(player.beamT>0){
+    const len=560;
+    const x2=player.x+Math.cos(player.beamA)*len, y2=player.y+Math.sin(player.beamA)*len;
+    ctx.save();
+    ctx.strokeStyle=css(mix(tint('yellow'),[255,255,255],.2), .5+player.beamT*4);
+    ctx.lineWidth=2.4+jit(3,boilFrame,1);
+    ctx.beginPath(); ctx.moveTo(player.x,player.y); ctx.lineTo(x2+jit(5,1,3),y2+jit(5,2,3)); ctx.stroke();
+    ctx.strokeStyle=css(tint('yellow'),.2); ctx.lineWidth=6;
+    ctx.beginPath(); ctx.moveTo(player.x,player.y); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.restore();
+  }
+  // chain arcs
+  for(const a of arcs){
+    ctx.beginPath();
+    const segs=5;
+    for(let i=0;i<=segs;i++){
+      const k=i/segs;
+      const px=a.x1+(a.x2-a.x1)*k+(i>0&&i<segs?jit(a.seed,i,7):0);
+      const py=a.y1+(a.y2-a.y1)*k+(i>0&&i<segs?jit(a.seed,i+9,7):0);
+      i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.strokeStyle=css(tint('yellow'), a.t/.12*.8); ctx.lineWidth=1.6; ctx.stroke();
+  }
+
+  // player bullets — pigment dabs, lobs, bolts
   for(const b of pbullets){
     if(b.kind==='lob'){
       const k=Math.min(1,b.t/b.T), hgt=Math.sin(Math.PI*k)*26;
@@ -1051,7 +1411,7 @@ function render(t){
 
   // singularity pulses — contracting rings
   for(const pu of pulses){
-    ctx.beginPath(); ctx.arc(pu.x,pu.y, 20+110*(pu.t/.35),0,7);
+    ctx.beginPath(); ctx.arc(pu.x,pu.y, 20+(pu.r-20)*(pu.t/.35),0,7);
     ctx.strokeStyle=css(tint('purple'), .5*pu.t/.35); ctx.lineWidth=2; ctx.stroke();
   }
 
@@ -1098,7 +1458,6 @@ function drawEnemy(e){
   if(e.type==='strata'){
     watercolor(ctx,(cc,s)=>{ strataPath(cc,e.x,e.y,e.r,e.ph||0,e.seed+s); },
       tcol,edge,e.seed,{a1:.4,a2:.3,edgeW:2.2,lineW:1.2});
-    // internal strata lines — the shape signature
     ctx.strokeStyle=css(dark(tcol,.65),.5); ctx.lineWidth=1;
     for(let i=-1;i<=1;i++){
       ctx.beginPath();
@@ -1110,17 +1469,21 @@ function drawEnemy(e){
       ctx.stroke();
     }
   }
+  if(e.type==='spine'){
+    watercolor(ctx,(cc,s)=>{ spinePath(cc,e.x,e.y,e.r*1.3,e.rot,e.seed+s); },
+      tcol,edge,e.seed,{a1:.4,a2:.3,edgeW:1.8,lineW:1.1});
+    ctx.beginPath(); ctx.arc(e.x,e.y,e.r*.3,0,7);
+    ctx.fillStyle=css(dark(tcol,.6),.7); ctx.fill();
+  }
   if(e.type==='plaster'){
     watercolor(ctx,(cc,s)=>{ blobPath(cc,e.x,e.y,e.r,7,e.seed+s,.2); },
       tcol,edge,e.seed,{a1:.45,a2:.3,edgeW:2,lineW:1.1});
-    // machined right angle — apparatus, not creature
     ctx.strokeStyle=css(dark(tcol,.55),.6); ctx.lineWidth=1.2;
     ctx.strokeRect(e.x-3+jit(e.seed,41,.5), e.y-3+jit(e.seed,42,.5), 6,6);
   }
   if(e.type==='husk'){
     watercolor(ctx,(cc,s)=>{ blobPath(cc,e.x,e.y-4,e.r,10,e.seed+s,.22); },
       mix(tcol,[210,204,190],.5),edge,e.seed,{a1:.5,a2:.35,edgeW:2.6,lineW:1.4});
-    // drape lines — a sheeted thing
     ctx.strokeStyle='rgba(100,94,84,.4)'; ctx.lineWidth=1;
     for(let i=0;i<3;i++){
       ctx.beginPath();
@@ -1155,20 +1518,120 @@ function drawEnemy(e){
   ctx.globalAlpha=1;
 }
 
+function drawInteractable(it,t){
+  const kindColor={ forge:'red', hatch:'blue', barrow:'yellow' }[it.kind]||'red';
+  const pulse=.5+.5*Math.sin(it.pulse*2.4);
+  ctx.beginPath(); ctx.arc(it.x,it.y,it.r+10+pulse*6,0,7);
+  ctx.strokeStyle=css(mix(INK,tint(kindColor),.4),.25+.2*pulse); ctx.lineWidth=1.2; ctx.stroke();
+  if(it.kind==='forge'){
+    watercolor(ctx,(cc,s)=>{ shardPath(cc,it.x,it.y,it.r,.4,it.seed+s,.8); },
+      mix([120,112,104],COLORS.red.live,lib.red.t*.5),[60,52,46],it.seed,
+      {a1:.5,a2:.35,edgeW:2.6,lineW:1.5});
+    ctx.beginPath(); blobPath(ctx,it.x,it.y,it.r*.4,7,it.seed+3,.3);
+    ctx.fillStyle='rgba(28,24,22,.8)'; ctx.fill();
+  } else if(it.kind==='hatch'){
+    watercolor(ctx,(cc,s)=>{ strataPath(cc,it.x,it.y,it.r*.9,t*.5,it.seed+s); },
+      mix([116,120,126],COLORS.blue.live,lib.blue.t*.5),[54,58,66],it.seed,
+      {a1:.5,a2:.35,edgeW:2.6,lineW:1.5});
+    ctx.strokeStyle='rgba(40,44,52,.6)'; ctx.lineWidth=1.4;
+    for(let i=-1;i<=1;i++){
+      ctx.beginPath();
+      ctx.moveTo(it.x-it.r*.7,it.y+i*8+jit(it.seed,i+80,.8));
+      ctx.lineTo(it.x+it.r*.7,it.y+i*8+jit(it.seed,i+83,.8));
+      ctx.stroke();
+    }
+  } else if(it.kind==='barrow'){
+    // the buried door — a slab under a mound, radiant seams showing through
+    watercolor(ctx,(cc,s)=>{ blobPath(cc,it.x,it.y+6,it.r*1.15,8,it.seed+s,.25); },
+      mix([150,142,120],COLORS.yellow.live,lib.yellow.t*.3),[80,72,52],it.seed,
+      {a1:.5,a2:.35,edgeW:2.6,lineW:1.5});
+    ctx.strokeStyle=css(mix([120,110,80],COLORS.yellow.live,.4),.5); ctx.lineWidth=1.2;
+    for(let i=0;i<6;i++){
+      const a=(i/6)*Math.PI*2+.3;
+      ctx.beginPath();
+      ctx.moveTo(it.x+Math.cos(a)*it.r*.3, it.y+Math.sin(a)*it.r*.3);
+      ctx.lineTo(it.x+Math.cos(a)*(it.r*.8+jit(it.seed,i,2)), it.y+Math.sin(a)*(it.r*.8));
+      ctx.stroke();
+    }
+  }
+  const label={ forge:'COLD FORGE — VERMILION', hatch:'FLOODED HATCH — ULTRAMARINE',
+    barrow:'BURIED DOOR — ORPIMENT' }[it.kind];
+  ctx.font='9px "Courier New",monospace';
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(58,53,44,.6)';
+  ctx.fillText(label, it.x, it.y+it.r+24);
+}
+
+function drawEntrance(hd,t){
+  const c = hd.act==='endless' ? 'grey' : hd.act;
+  const col = c==='grey' ? COLORS.grey.live : tint(c);
+  const pulse=.5+.5*Math.sin(hd.pulse*2);
+  // the doorway: two jambs and a lintel
+  ctx.strokeStyle=css(INK,.7); ctx.lineWidth=2.2;
+  ctx.beginPath();
+  ctx.moveTo(hd.x-22+jit(hd.seed,1,1), hd.y+30); ctx.lineTo(hd.x-22+jit(hd.seed,2,1), hd.y-26);
+  ctx.lineTo(hd.x+22+jit(hd.seed,3,1), hd.y-26); ctx.lineTo(hd.x+22+jit(hd.seed,4,1), hd.y+30);
+  ctx.stroke();
+  // the dark inside
+  ctx.fillStyle='rgba(58,53,44,.14)';
+  ctx.fillRect(hd.x-19,hd.y-24,38,52);
+  // the seal
+  ctx.beginPath(); ctx.arc(hd.x,hd.y-2,8+pulse*2,0,7);
+  ctx.strokeStyle=css(col,.8); ctx.lineWidth=2; ctx.stroke();
+  ctx.font='9px "Courier New",monospace';
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(58,53,44,.65)';
+  ctx.fillText(ACT_LABEL[hd.act], hd.x, hd.y+48);
+}
+
+function drawDoor(t){
+  const pulse=.5+.5*Math.sin(t*3);
+  ctx.strokeStyle=css(INK,.6); ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(door.x-14, door.y-34); ctx.lineTo(door.x+10+jit(door.seed,1,1), door.y-30);
+  ctx.moveTo(door.x-14, door.y+34); ctx.lineTo(door.x+10+jit(door.seed,2,1), door.y+30);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(door.x,door.y,10+pulse*4,0,7);
+  ctx.strokeStyle=css(INK,.35+.25*pulse); ctx.lineWidth=1.4; ctx.stroke();
+  ctx.font='9px "Courier New",monospace';
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(58,53,44,.55)';
+  ctx.fillText('NEXT BAY', door.x-8, door.y+52);
+}
+
+function drawSwatchDrop(sd,t){
+  const bob=Math.sin(t*2+sd.seed)*3;
+  ctx.save(); ctx.translate(sd.x,sd.y+bob); ctx.rotate(Math.sin(sd.seed)*.15);
+  // a paper chip
+  ctx.fillStyle=css(PAPER,.9);
+  ctx.strokeStyle=css(INK,.5); ctx.lineWidth=1;
+  ctx.fillRect(-16,-20,32,40); ctx.strokeRect(-16,-20,32,40);
+  ctx.fillStyle=css(tint(sd.def.color),.85);
+  ctx.fillRect(-10,-14,20,16);
+  if(sd.fugitive){
+    ctx.font='7px "Courier New",monospace'; ctx.textAlign='center';
+    ctx.fillStyle=css(INK,.55); ctx.fillText('fugitive',0,10);
+  }
+  ctx.restore();
+  ctx.font='9px "Courier New",monospace'; ctx.textAlign='center';
+  ctx.fillStyle='rgba(58,53,44,.65)';
+  ctx.fillText(sd.def.name, sd.x, sd.y+34);
+  ctx.fillStyle='rgba(58,53,44,.45)';
+  ctx.fillText(sd.def.desc, sd.x, sd.y+46);
+}
+
 function drawKiln(t){
   const k=kiln;
-  const heat = phase==='firing' ? kilnTemp : (phase==='birth'||lib.purple.on) ? 1 : 0;
-  // attention ring while waiting to be lit
-  if(phase==='kilnRevealed'){
+  const st = raid?raid.state:'';
+  const heat = st==='firing' ? kilnTemp : (st==='birth'||st==='done'||lib.purple.on) ? 1 : 0;
+  if(st==='objective'){
     const pulse=.5+.5*Math.sin(t*2.4);
     ctx.beginPath(); ctx.arc(k.x,k.y,k.r+12+pulse*6,0,7);
     ctx.strokeStyle=css(mix(INK,COLORS.purple.live,.4),.25+.2*pulse); ctx.lineWidth=1.2; ctx.stroke();
   }
-  // the body: derelict brick, warming toward purple as it fires
   watercolor(ctx,(cc,s)=>{ blobPath(cc,k.x,k.y,k.r*1.05,6,s+k.seed,.18); },
     mix([132,122,112],[96,58,104],heat*.55),[52,44,40],k.seed,
     {a1:.55,a2:.35,edgeW:3,lineW:1.6});
-  // brick courses
   ctx.strokeStyle='rgba(58,50,44,.35)'; ctx.lineWidth=1;
   for(let i=-1;i<=1;i++){
     ctx.beginPath();
@@ -1176,7 +1639,6 @@ function drawKiln(t){
     ctx.lineTo(k.x+k.r*.8, k.y+i*k.r*.4+jit(k.seed,i+93,1));
     ctx.stroke();
   }
-  // the mouth
   ctx.beginPath(); blobPath(ctx,k.x,k.y+4,k.r*.42,7,k.seed+5,.3);
   ctx.fillStyle=css(mix([30,26,24],[150,70,160],heat),.9); ctx.fill();
   if(heat>.02){
@@ -1185,8 +1647,7 @@ function drawKiln(t){
     ctx.fillStyle=css([190,100,210],.14*heat*(0.8+.2*Math.sin(t*6))); ctx.fill();
     ctx.restore();
   }
-  // temperature gauge, drawn on the world
-  if(phase==='firing'){
+  if(st==='firing'){
     ctx.beginPath(); ctx.arc(k.x,k.y,k.r+18,0,Math.PI*2);
     ctx.strokeStyle='rgba(58,53,44,.2)'; ctx.lineWidth=3; ctx.stroke();
     ctx.beginPath(); ctx.arc(k.x,k.y,k.r+18,-Math.PI/2,-Math.PI/2+kilnTemp*Math.PI*2);
@@ -1198,45 +1659,10 @@ function drawKiln(t){
   ctx.fillText('KILN — UNACCESSIONED', k.x, k.y+k.r+32);
 }
 
-function drawInteractable(it,t){
-  const isForge=it.kind==='forge';
-  const c=isForge?'red':'blue';
-  const pulse=.5+.5*Math.sin(it.pulse*2.4);
-  // attention ring
-  ctx.beginPath(); ctx.arc(it.x,it.y,it.r+10+pulse*6,0,7);
-  ctx.strokeStyle=css(mix(INK,tint(c),.4),.25+.2*pulse); ctx.lineWidth=1.2; ctx.stroke();
-  if(isForge){
-    watercolor(ctx,(cc,s)=>{ shardPath(cc,it.x,it.y,it.r,.4,it.seed+s,.8); },
-      mix([120,112,104],COLORS.red.live,lib.red.t*.5),[60,52,46],it.seed,
-      {a1:.5,a2:.35,edgeW:2.6,lineW:1.5});
-    // the hearth mouth, cold and dark
-    ctx.beginPath(); blobPath(ctx,it.x,it.y,it.r*.4,7,it.seed+3,.3);
-    ctx.fillStyle='rgba(28,24,22,.8)'; ctx.fill();
-  } else {
-    watercolor(ctx,(cc,s)=>{ strataPath(cc,it.x,it.y,it.r*.9,t*.5,it.seed+s); },
-      mix([116,120,126],COLORS.blue.live,lib.blue.t*.5),[54,58,66],it.seed,
-      {a1:.5,a2:.35,edgeW:2.6,lineW:1.5});
-    // hatch bars
-    ctx.strokeStyle='rgba(40,44,52,.6)'; ctx.lineWidth=1.4;
-    for(let i=-1;i<=1;i++){
-      ctx.beginPath();
-      ctx.moveTo(it.x-it.r*.7,it.y+i*8+jit(it.seed,i+80,.8));
-      ctx.lineTo(it.x+it.r*.7,it.y+i*8+jit(it.seed,i+83,.8));
-      ctx.stroke();
-    }
-  }
-  // label
-  ctx.font='9px "Courier New",monospace';
-  ctx.textAlign='center';
-  ctx.fillStyle='rgba(58,53,44,.6)';
-  ctx.fillText(isForge?'COLD FORGE — VERMILION':'FLOODED HATCH — ULTRAMARINE', it.x, it.y+it.r+24);
-}
-
 function drawPayne(t){
   const p=player;
   const flick = p.inv>0 && Math.sin(t*40)>0 ? .45 : 1;
   ctx.globalAlpha=flick;
-  // dash smear
   if(p.dashT>0){
     ctx.beginPath();
     ctx.ellipse(p.x-Math.cos(p.dashA)*18, p.y-Math.sin(p.dashA)*18, 20,8,p.dashA,0,7);
@@ -1244,7 +1670,6 @@ function drawPayne(t){
   }
   watercolor(ctx,(cc,s)=>{ blobPath(cc,p.x,p.y,p.r,11,s+p.seed,.24); },
     PAYNE,[15,12,10],p.seed,{a1:.75,a2:.5,edgeW:2,lineW:1.6,mis:1.5});
-  // dry-clay crack texture
   ctx.strokeStyle='rgba(10,8,7,.5)'; ctx.lineWidth=.8;
   for(const f of fissures){
     ctx.beginPath();
@@ -1289,27 +1714,20 @@ const resetBtn=document.getElementById('reset');
 
 function applySaveToWorld(s){
   if(!s) return;
-  if(s.red){ lib.red.on=true; lib.red.t=1; slots.delivery='red'; slots.payload='red'; }
-  if(s.blue){ lib.blue.on=true; lib.blue.t=1; }
-  if(s.purple){ lib.purple.on=true; lib.purple.t=1; }
+  for(const c of COLOR_ORDER){
+    if(s[c]){ lib[c].on=true; lib[c].t=1; }
+  }
+  if(s.red){ slots.delivery='red'; slots.payload='red'; }
+  if(typeof s.resonance==='number') resonance=s.resonance;
 }
 function startGame(){
   audioOn();
   titleEl.style.display='none';
-  const s=loadSave();
-  if(s&&(s.red||s.blue||s.purple)){
-    applySaveToWorld(s);
-    phase = (s.red&&s.blue&&s.purple) ? 'restored'
-          : (s.red&&s.blue) ? 'free' : 'act1';
-  } else {
-    phase='prologue';
-  }
-  killsPhase=0; resonance=0; kiln=null; kilnTemp=0; interactable=null;
-  player.x=W/2; player.y=H/2; player.hits=0;
+  applySaveToWorld(loadSave());
+  player.hits=0;
   for(const c of ownedColors()) player.charge[c]=1;
-  enemies=[]; ebullets=[]; pbullets=[]; drops=[];
-  maintainWaves();
-  updateReport(); updateWeaponHud();
+  enterHub();
+  updateWeaponHud();
   blip(392,.2,'sine',.04);
 }
 beginBtn.addEventListener('click',startGame);
@@ -1322,7 +1740,7 @@ resetBtn.addEventListener('click',()=>{
 
 (function initTitle(){
   const s=loadSave();
-  if(s&&(s.red||s.blue||s.purple)){
+  if(s&&(s.red||s.blue||s.yellow||s.purple)){
     beginBtn.textContent='Resume the restoration';
     resetBtn.style.display='block';
   }
