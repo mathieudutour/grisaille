@@ -86,7 +86,7 @@ function ownedColors(){ return COLOR_ORDER.filter(c=>lib[c].on); }
 
 const SAVE_KEY='grisaille-save-v1';
 function save(){ try{
-  const s={ res };
+  const s={ res, seen };
   for(const c of COLOR_ORDER) s[c]=lib[c].on;
   localStorage.setItem(SAVE_KEY, JSON.stringify(s));
 }catch(e){} }
@@ -377,6 +377,7 @@ function maintainWaves(){
 const keys={};
 addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
+  if(dialogPages && (k===' '||k==='enter')){ advanceDialog(); e.preventDefault(); return; }
   keys[k]=true;
   if(k==='q') cycleSlot('delivery');
   if(k==='e') cycleSlot('payload');
@@ -784,6 +785,95 @@ function isMixedFor(sec){
 }
 
 /* ============================================================
+   STORY — the paperwork speaks (§2)
+   Every narrative beat arrives as a document: condition reports,
+   the Wardens' own words (they all volunteered, §2.3), and at the
+   end, a memo from the desk of L. Hargreaves.
+   ============================================================ */
+const seen={};
+const STORY={
+  intro:[
+    {hd:'CONDITION REPORT — ACCESSION 00-00-A', body:
+'OBJECT ......... world, complete\nCONDITION ...... colours — removed. catalogued. stable.\nTREATMENT ...... total. performed without authorisation.\nFILED BY ....... L.H. — archive staff, A-17'},
+    {body:'Colour was a worked material once. Mined, ground, traded, guarded by guilds. People died for a blue.\n\nThen a conservator concluded that difference creates division, and division creates blood — and took all of it into storage. For its own protection.\n\nNobody authorised it. Nobody stopped him.'},
+    {body:'What he gathered as light became a single blinding white.\n\nWhat settled out as matter had to settle somewhere. It settled into you.\n\nYou are the sediment of the world’s colour — compacted pigment, cracked and inert, and the only vessel that can hold it again.\n\nFill the fissures.'},
+  ],
+  red_intro:[
+    {hd:'CONDITION REPORT — VERMILION', body:
+'OBJECT ......... red, entire\nCONDITION ...... banked in a cold forge. sleeping.\nNOTE ........... the keeper volunteered.'},
+    {quote:true,color:'red',body:'Red was warmth. Appetite. Courage — and every war ever started.\n\nI ran the smelters. Cinnabar is mercury ore; I know what a gram cost in bodies. When the conservator came he did not have to argue. I banked the forge myself.\n\nI have never slept so well.'},
+    {quote:true,color:'red',body:'Take it, if you can hold it. But understand what you are choosing: red does not come back grateful. It comes back hungry, and everything red will hunt you.\n\nThat is not a threat. It is a property of the material.'},
+  ],
+  red_out:[
+    {quote:true,color:'red',body:'…warm. I had forgotten warm.\n\nDo not make me regret remembering.'},
+  ],
+  blue_intro:[
+    {hd:'CONDITION REPORT — ULTRAMARINE', body:
+'OBJECT ......... blue, entire\nCONDITION ...... drowned. submerged. still.\nNOTE ........... the keeper volunteered.'},
+    {quote:true,color:'blue',body:'Blue was depth. Distance. Grief.\n\nIt came from one valley at the end of a trade route people died on — worth more than gold, by weight, in mourning.\n\nWithout blue no one grieves. But without it no one remembers, either. I drowned it past the bodies in the pass and told myself that was mercy.'},
+    {quote:true,color:'blue',body:'Open the hatch and everything lost comes back with its full weight.\n\nYou will remember everything. You will wish you could stop.'},
+  ],
+  blue_out:[
+    {quote:true,color:'blue',body:'There it is. The weight.\n\nCarry it better than we did.'},
+  ],
+  yellow_intro:[
+    {hd:'CONDITION REPORT — ORPIMENT', body:
+'OBJECT ......... yellow, entire\nCONDITION ...... buried. deep. unlit.\nNOTE ........... the keeper volunteered.'},
+    {quote:true,color:'yellow',body:'Yellow was light. Truth. Revelation.\n\nIt showed people things they had arranged very carefully not to see. My guild ground arsenic and called it a king’s colour — we sold revelation and poison from the same jar.\n\nI buried it deep, and the world thanked me by forgetting why.'},
+    {quote:true,color:'yellow',body:'Dig, then. But remember this at the first sunrise:\n\neverything you light up can see you too.'},
+  ],
+  yellow_out:[
+    {quote:true,color:'yellow',body:'Look at that.\n\nNow nothing stays hidden. Including you.'},
+  ],
+  kiln_reveal:[
+    {body:'The secondaries have no vaults, no keepers, no paperwork.\n\nGreen, orange and purple were never stolen — they never existed. They only ever occurred where two colours touched.'},
+    {body:'The conservator’s whole method is subtraction, and subtraction has exactly one answer it cannot file:\n\nmake something that was never there to take.\n\nA kiln stands in the unaccessioned territory — the ruined guild districts he judged not worth preserving. Your mixing revealed it. Nothing else could have.'},
+  ],
+  first_firing:[
+    {body:'Only the mix feeds the kiln.\n\nAt every moment of the Firing, the pure colour will be the easier weapon — each parent guild shrugs off its own half of the mix, and subtraction will always be locally optimal.\n\nRefuse it anyway. Held long enough, that refusal is the entire argument.'},
+  ],
+  all_six:[
+    {hd:'INTERDEPARTMENTAL MEMO — A-17', body:
+'FROM ........... L. Hargreaves, archive staff\nRE ............. object 88-19-P, “Payne”\n\nThe object has de-accessioned six colours and manufactured three that were never in the collection. This is not restoration. It is contamination.\n\nI was not angry when I took the colours, and I am not angry now. I simply note that every war we will now have again was, at one point, filed safely in a drawer.\n\nI have completed the appropriate paperwork.'},
+    {hd:'CONDITION REPORT — 88-19-P', body:
+'OBJECT ......... figure, compacted pigment\nCONDITION ...... cracked throughout. leaking colour.\nSTABILITY ...... none. fugitive.\nRECOMMENDATION . contain.\n\n— L.H.'},
+  ],
+};
+
+const dialogEl=document.getElementById('dialog');
+const dialogPaper=document.getElementById('dialogPaper');
+let dialogPages=null, dialogIx=0, dialogQueue=[];
+function showDialog(key,pages){
+  if(key){ if(seen[key]) return; seen[key]=true; save(); }
+  if(dialogPages){ dialogQueue.push(pages); return; }
+  dialogPages=pages; dialogIx=0;
+  renderDialogPage();
+  dialogEl.style.display='flex';
+}
+function renderDialogPage(){
+  const p=dialogPages[dialogIx];
+  const accent = p.color ? css(COLORS[p.color].live) : css(INK);
+  dialogPaper.innerHTML =
+    (p.hd?`<span class="hd">${p.hd}</span><br>`:'') +
+    `<div class="body${p.quote?' quote':''}"${p.quote?` style="border-left-color:${accent}"`:''}>${p.body}</div>` +
+    `<div class="cont">${dialogIx<dialogPages.length-1?'continue':'close'} — click / space</div>`;
+}
+function advanceDialog(){
+  if(!dialogPages) return;
+  blip(500,.04,'sine',.02);
+  dialogIx++;
+  if(dialogIx<dialogPages.length){ renderDialogPage(); return; }
+  dialogPages=null;
+  dialogEl.style.display='none';
+  mouse.down=false;               // don't fire into the closing page
+  if(dialogQueue.length){
+    dialogPages=dialogQueue.shift(); dialogIx=0;
+    renderDialogPage(); dialogEl.style.display='flex';
+  }
+}
+dialogEl.addEventListener('pointerdown',e=>{ e.preventDefault(); audioOn(); advanceDialog(); });
+
+/* ============================================================
    HUD — the paperwork
    ============================================================ */
 const reportEl=document.getElementById('report');
@@ -972,6 +1062,7 @@ function buildHub(){
     hubDoors.push({ act, x:W*(.5+(i-(acts.length-1)/2)*.24), y:H*.3,
       r:30, seed:(act.length*131+7)|0, pulse:0 });
   });
+  if(hubDoors.some(d=>SECONDARIES[d.act])) showDialog('kiln_reveal', STORY.kiln_reveal);
 }
 function startRaid(act){
   raid={ act, room:0, state:'combat', endless:act==='endless' };
@@ -1099,6 +1190,8 @@ function placeObjective(act){
   }
   const kind = act==='red'?'forge' : act==='blue'?'hatch' : 'barrow';
   interactable={ kind, x, y, r:26, seed:(Math.random()*999)|0, pulse:0 };
+  // the Warden's condition report, and their argument (§2.3)
+  showDialog(act+'_intro', STORY[act+'_intro']);
   // its keepers, still in storage, rendered grey — the crowd you cannot yet read (§4)
   const guard = GUILD_TYPE[act];
   const n = W<700?4:5;
@@ -1123,6 +1216,12 @@ function liberate(color){
   if(color==='blue') setTimeout(()=>blip(392,.8,'sine',.04),150);
   if(color==='yellow') setTimeout(()=>blip(587,.7,'sine',.045),150);
   if(SECONDARIES[color]) setTimeout(()=>blip(311,.9,'sine',.045),150);
+  // the Warden's parting words, once the stamp has landed
+  if(STORY[color+'_out'])
+    setTimeout(()=>{ if(mode!=='title') showDialog(color+'_out', STORY[color+'_out']); }, 2800);
+  // and when the last colour exists, a memo arrives from the desk of L.H.
+  if(ownedColors().length===COLOR_ORDER.length)
+    setTimeout(()=>{ if(mode!=='title') showDialog('all_six', STORY.all_six); }, 3400);
   updateReport(); updateWeaponHud();
 }
 
@@ -1160,6 +1259,7 @@ function touchThings(){
     interactable=null;
     raid.state='firing'; kilnTemp=.2;
     const [p1,p2]=SECONDARIES[raid.act].parents;
+    showDialog('first_firing', STORY.first_firing);
     showStamp(raid.act,`THE FIRING\nonly ${p1}+${p2} feeds the kiln`, 2600);
     blip(392,.4,'sine',.05); blip(311,.6,'sine',.04);
     updateReport();
@@ -1200,6 +1300,7 @@ function update(rdt,t){
   const dt=rdt*timescale;
 
   if(mode==='title') return;
+  if(dialogPages) return;         // the world holds still while the paperwork speaks
   if(reshelving>0){ reshelving-=rdt; return; }
 
   reportT-=rdt; if(reportT<=0){ reportT=.3; updateReport();
@@ -2074,6 +2175,17 @@ function applySaveToWorld(s){
   if(s.red){ slots.delivery='red'; slots.payload='red'; }
   if(s.res) for(const sec in res) res[sec]=s.res[sec]||0;
   else if(typeof s.resonance==='number') res.purple=s.resonance;   // pre-kilns save
+  if(s.seen) Object.assign(seen, s.seen);
+  else {
+    // an older save: don't replay beats the player already lived through
+    if(ownedColors().length) seen.intro=true;
+    for(const c of ['red','blue','yellow'])
+      if(lib[c].on){ seen[c+'_intro']=true; seen[c+'_out']=true; }
+    if(Object.keys(SECONDARIES).some(sec=>lib[sec].on)){
+      seen.kiln_reveal=true; seen.first_firing=true;
+    }
+    if(ownedColors().length===COLOR_ORDER.length) seen.all_six=true;
+  }
 }
 function startGame(){
   audioOn();
@@ -2084,6 +2196,7 @@ function startGame(){
   enterHub();
   updateWeaponHud();
   blip(392,.2,'sine',.04);
+  if(!ownedColors().length) showDialog('intro', STORY.intro);
 }
 beginBtn.addEventListener('click',startGame);
 document.getElementById('btnD').addEventListener('click',()=>{audioOn();cycleSlot('delivery');});

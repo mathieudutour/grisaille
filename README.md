@@ -44,6 +44,12 @@ back to the hub, colors kept, swatches and excess pigment forfeit.
 color ("brush dabs pierce", "chill stacks faster", "quill overheats slower"…). *Fugitive*
 swatches are stronger but fade; *permanent* ones last the run.
 
+**The story arrives as paperwork (§2.5):** an opening condition report filed on the world
+itself; each Warden introduced by their report and their own argument — they all volunteered
+(§2.3), and the game never fully refutes any of them; the kiln reveal; and once all six
+colors exist, an interdepartmental memo from the desk of L. Hargreaves, archive staff, A-17.
+Each document shows once per save, and the world holds still while the paperwork speaks.
+
 **Relics (§7.9):** every archive may also hold one piece of stationery or lab equipment —
 pigment vial (+damage for one color), catalogue leaf (routes always labelled), humidity
 gauge (fugitive swatches fade slower), crate seal (a fourth swatch on offer), conservator's
