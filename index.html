@@ -72,6 +72,29 @@
   #dialog .cont{margin-top:16px;font-size:9px;color:var(--faint);letter-spacing:.14em;
     text-transform:uppercase;text-align:right}
 
+  /* Requisitions desk (§7.7) */
+  #shop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(233,226,211,.6);z-index:9}
+  #shop .paper{background:var(--paper);border:1px solid var(--ink);padding:24px 30px 18px;
+    font-size:12px;line-height:1.9;min-width:min(480px,88vw);
+    transform:rotate(.4deg);box-shadow:3px 4px 0 rgba(58,53,44,.15)}
+  #shop .hd{font-weight:bold;border-bottom:1px solid var(--ink);display:inline-block;
+    padding-bottom:2px;margin-bottom:6px;letter-spacing:.08em}
+  #shop .bal{font-size:11px;color:var(--faint);margin-bottom:10px;letter-spacing:.06em}
+  #shop .row{display:flex;align-items:baseline;gap:10px;padding:5px 0;
+    border-bottom:1px dashed rgba(58,53,44,.2)}
+  #shop .row .nm{min-width:150px;letter-spacing:.04em}
+  #shop .row .ds{flex:1;font-size:10px;color:var(--faint)}
+  #shop .row .rk{font-size:10px;letter-spacing:.2em}
+  #shop .row button{font-family:inherit;font-size:10px;letter-spacing:.08em;
+    padding:3px 10px;background:transparent;border:1.5px solid var(--ink);
+    border-radius:2px;cursor:pointer;color:var(--ink);text-transform:uppercase}
+  #shop .row button:disabled{opacity:.35;cursor:default}
+  #shop .closer{margin-top:12px;text-align:right}
+  #shop .closer button{font-family:inherit;font-size:10px;letter-spacing:.1em;
+    padding:5px 14px;background:transparent;border:1.5px solid var(--ink);
+    border-radius:2px;cursor:pointer;color:var(--ink);text-transform:uppercase}
+
   /* Re-shelving form overlay */
   #form{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
     background:rgba(233,226,211,.55);pointer-events:none}
@@ -140,6 +163,7 @@
 <div id="stamp"></div>
 <div id="form"><div class="paper" id="formText"></div></div>
 <div id="dialog"><div class="paper" id="dialogPaper"></div></div>
+<div id="shop"><div class="paper" id="shopPaper"></div></div>
 <button class="tbtn" id="btnD">delivery</button>
 <button class="tbtn" id="btnP">payload</button>
 
