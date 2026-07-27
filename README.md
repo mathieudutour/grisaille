@@ -18,9 +18,16 @@ assets. Open `index.html` in a browser and it runs.
 - **The cold forge.** Liberate **Vermilion**. The flip: the same crowd resolves at a glance.
   The red guild enters the pool and starts hunting you.
 - **The flooded hatch.** Liberate **Ultramarine**. The two-slot weapon grid opens:
-  delivery × payload, 4 combinations, hot-swapped mid-fight (`Q` / `E`).
-- **The Liberation (endless).** Mixed factions, own-color resistance, the cross-harvest
-  loop: spend the color you have to farm the color you lack.
+  delivery × payload, hot-swapped mid-fight (`Q` / `E`).
+- **Resonance (§9).** Kills with mixed red/blue weapons reveal the **Purple Kiln** in
+  unaccessioned territory. The mix is the key, not the reward.
+- **The Firing (§7.6).** Only kills made with the mix feed the kiln; both parent guilds
+  attack, each resisting half of it; swapping to the pure counter-color is always locally
+  optimal — and feeds nothing. Reach temperature and the first purple things ever to exist
+  are born from the kiln mouth, immediately hostile.
+- **The Restoration (endless).** Three colors, nine weapons — including the **Compass**
+  phase bolt that pierces everything on a line, and the **Singularity** payload that
+  vacuums crowds into a point. Own-color resistance and the cross-harvest loop throughout.
 
 Systems in: per-color charge meters read off Payne's fissures, pigment-drop economy,
 permanent drying stains (§3.6), re-shelving with Working Stock (§7.7), condition-report
