@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GRISAILLE — Flip Test</title>
+<style>
+  :root{
+    --paper:#e9e2d3; --ink:#3a352c; --faint:#8d8578;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--paper);
+    font-family:"Courier New",Courier,monospace;color:var(--ink);
+    -webkit-user-select:none;user-select:none;touch-action:none}
+  canvas{display:block;width:100vw;height:100vh}
+  /* Condition report, top-left */
+  #report{position:fixed;top:14px;left:16px;font-size:11px;line-height:1.7;
+    letter-spacing:.04em;pointer-events:none;white-space:pre;opacity:.85}
+  #report .hd{font-weight:bold;border-bottom:1px solid var(--ink);display:inline-block;
+    padding-bottom:1px;margin-bottom:3px}
+  /* Controls hint, bottom-left */
+  #hint{position:fixed;bottom:12px;left:16px;font-size:10px;letter-spacing:.05em;
+    color:var(--faint);pointer-events:none}
+  /* The liberation stamp */
+  #flip{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) rotate(-1.2deg);
+    font-family:"Courier New",Courier,monospace;font-size:13px;letter-spacing:.14em;
+    padding:10px 22px;background:transparent;color:#8a2f22;
+    border:2px solid #8a2f22;border-radius:3px;cursor:pointer;
+    text-transform:uppercase;opacity:.92}
+  #flip.grey{color:var(--ink);border-color:var(--ink)}
+  #flip:active{transform:translateX(-50%) rotate(-1.2deg) scale(.96)}
+  /* Re-shelving form overlay */
+  #form{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(233,226,211,.55);pointer-events:none}
+  #form .paper{background:var(--paper);border:1px solid var(--ink);padding:22px 30px;
+    font-size:12px;line-height:2;white-space:pre;transform:rotate(.6deg);
+    box-shadow:3px 4px 0 rgba(58,53,44,.15)}
+  #form .paper b{border-bottom:1px solid var(--ink)}
+  @media (max-width:700px){
+    #report{font-size:9px;line-height:1.6}
+    #hint{display:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="report"></div>
+<div id="hint">wasd / arrows — move · mouse — aim · hold click — fire<br>touch: left half — move · right half — aim &amp; fire</div>
+<button id="flip">Liberate red</button>
+<div id="form"><div class="paper" id="formText"></div></div>
+
+<script>
+"use strict";
+/* ============================================================
+   GRISAILLE — the flip test (§13)
+   One room. Greyscale. A crowd you can only read one at a time.
+   Then red comes back.
+   Rendering: procedural watercolor on paper. No image assets.
+   ============================================================ */
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W=0,H=0,DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W*DPR; cv.height = H*DPR;
+  cv.style.width = W+'px'; cv.style.height = H+'px';
+  makePaper(); resizeStains();
+}
+window.addEventListener('resize', resize);
+
+/* ---------- deterministic noise ---------- */
+function h1(n){ const s = Math.sin(n*127.1+311.7)*43758.5453; return s-Math.floor(s); }
+function h2(a,b){ return h1(a*157.31+b*61.7); }
+
+/* ---------- palette ---------- */
+const PAPER   = [233,226,211];
+const INK     = [58,53,44];
+const PAYNE   = [38,33,30];
+const RED     = [186,52,36];     // vermilion, live
+const RED_DIM = [150,86,74];     // matte stain ceiling (§3.6)
+const GREYRED = [138,130,118];   // red things, pre-liberation
+function css(c,a=1){ return `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`; }
+function mix(a,b,t){ return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+function dark(c,f){ return [c[0]*f,c[1]*f,c[2]*f]; }
+
+/* ---------- liberation state ---------- */
+let liberated = false;   // target
+let colorT = 0;          // eased 0..1, drives every red-aligned tint
+function redTint(){ return mix(GREYRED, RED, colorT); }
+function redStainTint(){ return mix([150,145,135], RED_DIM, colorT); }
+
+/* ---------- paper (cached) ---------- */
+let paper=null;
+function makePaper(){
+  paper = document.createElement('canvas');
+  paper.width = W*DPR; paper.height = H*DPR;
+  const p = paper.getContext('2d');
+  p.scale(DPR,DPR);
+  p.fillStyle = css(PAPER); p.fillRect(0,0,W,H);
+  // low-frequency tonal blotches
+  for(let i=0;i<60;i++){
+    const x=h1(i*3)*W, y=h1(i*3+1)*H, r=40+h1(i*3+2)*160;
+    const g=p.createRadialGradient(x,y,0,x,y,r);
+    const v = h1(i)>.5 ? 255 : 90;
+    g.addColorStop(0,`rgba(${v},${v-10},${v-30},${.028})`);
+    g.addColorStop(1,'rgba(0,0,0,0)');
+    p.fillStyle=g; p.fillRect(x-r,y-r,r*2,r*2);
+  }
+  // paper fibres
+  p.strokeStyle='rgba(120,110,95,.05)'; p.lineWidth=.6;
+  for(let i=0;i<450;i++){
+    const x=h1(i*7)*W, y=h1(i*7+2)*H, a=h1(i*7+4)*Math.PI, l=3+h1(i*7+5)*9;
+    p.beginPath(); p.moveTo(x,y); p.lineTo(x+Math.cos(a)*l, y+Math.sin(a)*l); p.stroke();
+  }
+  // fine grain
+  const gr=p.createImageData(160,160);
+  for(let i=0;i<gr.data.length;i+=4){
+    const v=(Math.random()*38)|0;
+    gr.data[i]=v; gr.data[i+1]=v; gr.data[i+2]=v; gr.data[i+3]=14;
+  }
+  const gc=document.createElement('canvas'); gc.width=160; gc.height=160;
+  gc.getContext('2d').putImageData(gr,0,0);
+  p.globalCompositeOperation='multiply';
+  p.fillStyle=p.createPattern(gc,'repeat'); p.fillRect(0,0,W,H);
+  p.globalCompositeOperation='source-over';
+  // faint aisle grid — a catalogued floor
+  p.strokeStyle='rgba(58,53,44,.06)'; p.lineWidth=1;
+  const cell=64;
+  for(let x=cell;x<W;x+=cell){ p.beginPath(); p.moveTo(x,0); p.lineTo(x,H); p.stroke(); }
+  for(let y=cell;y<H;y+=cell){ p.beginPath(); p.moveTo(0,y); p.lineTo(W,y); p.stroke(); }
+}
+
+/* ---------- persistent stains (§3.6: permanent, but dry) ---------- */
+let stains=null, stainCtx=null;
+function resizeStains(){
+  const old = stains;
+  stains=document.createElement('canvas');
+  stains.width=W*DPR; stains.height=H*DPR;
+  stainCtx=stains.getContext('2d'); stainCtx.scale(DPR,DPR);
+  if(old) stainCtx.drawImage(old,0,0,W,H);
+}
+function splat(x,y,tint,size,alpha){
+  const n=5+(h1(x+y)*4|0);
+  for(let i=0;i<n;i++){
+    const a=h2(x+i,y)*Math.PI*2, d=h2(y+i,x)*size*.8;
+    const px=x+Math.cos(a)*d, py=y+Math.sin(a)*d, r=size*(.35+h2(i,x+y)*.65);
+    stainCtx.beginPath();
+    blobPath(stainCtx, px,py, r, 9, (x*13+y*7+i*31)|0, .45);
+    stainCtx.fillStyle=css(tint, alpha*(0.5+h1(i+x)*0.5));
+    stainCtx.fill();
+  }
+}
+
+/* ---------- boiling-line drawing kit ---------- */
+let boilFrame=0;
+function jit(seed,i,amp){ return (h2(seed+i*17, boilFrame*911)-.5)*2*amp; }
+
+// irregular blob path (watercolor puddle / crate / body)
+function blobPath(c,x,y,r,pts,seed,rough){
+  for(let i=0;i<=pts;i++){
+    const k=i%pts, a=(k/pts)*Math.PI*2;
+    const rr=r*(1-rough/2+h2(seed,k)*rough)+jit(seed,k,r*.06);
+    const px=x+Math.cos(a)*rr, py=y+Math.sin(a)*rr;
+    i===0?c.moveTo(px,py):c.lineTo(px,py);
+  }
+  c.closePath();
+}
+
+// jagged shard star — red's shape signature (§11.2)
+function shardPath(c,x,y,r,rot,seed,squash){
+  const pts=7;
+  for(let i=0;i<=pts*2;i++){
+    const k=i%(pts*2);
+    const a=rot+(k/(pts*2))*Math.PI*2;
+    const base=(k%2===0)? r : r*(.38+h2(seed,k)*.2);
+    const rr=base+jit(seed,k,r*.09);
+    const px=x+Math.cos(a)*rr, py=y+Math.sin(a)*rr*(squash||1);
+    i===0?c.moveTo(px,py):c.lineTo(px,py);
+  }
+  c.closePath();
+}
+
+/* watercolor fill + misregistered boiling outline */
+function watercolor(c, pathFn, fill, edge, seed, opts={}){
+  const mis = opts.mis ?? 2.5;           // fill offset from outline
+  const mx = jit(seed,101,1)+Math.cos(seed)*mis;
+  const my = jit(seed,102,1)+Math.sin(seed*1.7)*mis;
+  // wash layers (offset = misregistration)
+  c.save(); c.translate(mx,my);
+  c.beginPath(); pathFn(c,seed);
+  c.fillStyle=css(fill, opts.a1 ?? .38); c.fill();
+  c.beginPath(); pathFn(c,seed+7);       // second warped pass
+  c.fillStyle=css(fill, opts.a2 ?? .3); c.fill();
+  // pigment pools at the edge
+  c.beginPath(); pathFn(c,seed);
+  c.strokeStyle=css(dark(fill,.72), .4); c.lineWidth=opts.edgeW ?? 3; c.stroke();
+  c.restore();
+  // pencil outline at true position, boiling
+  c.beginPath(); pathFn(c,seed+13);
+  c.strokeStyle=css(edge, opts.lineA ?? .8); c.lineWidth=opts.lineW ?? 1.4; c.stroke();
+}
+
+/* ============================================================
+   WORLD
+   ============================================================ */
+const rand=(a,b)=>a+Math.random()*(b-a);
+
+/* dust-sheeted crates (scenery) */
+let crates=[];
+function makeCrates(){
+  crates=[];
+  const n = W<700?4:6;
+  for(let i=0;i<n;i++){
+    crates.push({ x:rand(W*.12,W*.88), y:rand(H*.15,H*.85),
+      w:rand(50,110), h:rand(40,90), seed:(i*97+13) });
+  }
+}
+
+/* the player — Payne, sediment */
+const player={ x:0,y:0, r:15, vx:0,vy:0, aim:0, hits:0, charge:1, fireT:0, seed:555 };
+
+/* fissure network across Payne's back — fixed polylines */
+const fissures=[];
+(function(){
+  for(let f=0;f<4;f++){
+    const line=[]; let a=rand(0,Math.PI*2), x=rand(-4,4), y=rand(-4,4);
+    for(let s=0;s<5;s++){
+      line.push([x,y]);
+      a+=rand(-.9,.9); x+=Math.cos(a)*5.5; y+=Math.sin(a)*5.5;
+    }
+    fissures.push(line);
+  }
+})();
+
+/* red guild crowd */
+let enemies=[];
+function spawnEnemy(edge){
+  const m=40;
+  let x,y;
+  if(edge){ const s=Math.random()*4|0;
+    x = s===0?-m : s===1?W+m : rand(0,W);
+    y = s===2?-m : s===3?H+m : rand(0,H);
+  } else { x=rand(m,W-m); y=rand(m,H-m);
+    if(Math.hypot(x-player.x,y-player.y)<220) return spawnEnemy(edge); }
+  enemies.push({ x,y, r:rand(14,20), hp:6, rot:rand(0,7), spin:rand(-.8,.8),
+    seed:(Math.random()*9999)|0, fireT:rand(1,3), orbit:rand(170,300),
+    dir:Math.random()<.5?1:-1, hurt:0 });
+}
+
+let ebullets=[], pbullets=[], motes=[], drops=[], shake=0;
+
+/* ambient dust motes — the confusers */
+function makeMotes(){
+  motes=[];
+  for(let i=0;i<(W<700?26:42);i++){
+    motes.push({ x:rand(0,W), y:rand(0,H), a:rand(0,7),
+      s:rand(.10,.32), r:rand(2.2,3.4), seed:i*31 });
+  }
+}
+
+/* ============================================================
+   INPUT — keyboard/mouse + twin-stick touch
+   ============================================================ */
+const keys={};
+addEventListener('keydown',e=>{ keys[e.key.toLowerCase()]=true;
+  if(e.key.toLowerCase()==='l') toggleFlip(); });
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+let mouse={x:0,y:0,down:false};
+cv.addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
+cv.addEventListener('mousedown',()=>{mouse.down=true; audioOn();});
+addEventListener('mouseup',()=>mouse.down=false);
+
+let moveTouch=null, aimTouch=null;
+cv.addEventListener('touchstart',e=>{
+  audioOn();
+  for(const t of e.changedTouches){
+    if(t.clientX<W/2 && !moveTouch) moveTouch={id:t.identifier,ox:t.clientX,oy:t.clientY,x:t.clientX,y:t.clientY};
+    else if(!aimTouch) aimTouch={id:t.identifier,x:t.clientX,y:t.clientY};
+  }
+  e.preventDefault();
+},{passive:false});
+cv.addEventListener('touchmove',e=>{
+  for(const t of e.changedTouches){
+    if(moveTouch&&t.identifier===moveTouch.id){moveTouch.x=t.clientX;moveTouch.y=t.clientY;}
+    if(aimTouch&&t.identifier===aimTouch.id){aimTouch.x=t.clientX;aimTouch.y=t.clientY;}
+  }
+  e.preventDefault();
+},{passive:false});
+addEventListener('touchend',e=>{
+  for(const t of e.changedTouches){
+    if(moveTouch&&t.identifier===moveTouch.id) moveTouch=null;
+    if(aimTouch&&t.identifier===aimTouch.id) aimTouch=null;
+  }
+});
+
+/* ============================================================
+   AUDIO — tiny procedural blips
+   ============================================================ */
+let AC=null;
+function audioOn(){ if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+  if(AC&&AC.state==='suspended') AC.resume(); }
+function blip(f,dur,type,vol){
+  if(!AC) return;
+  const o=AC.createOscillator(), g=AC.createGain();
+  o.type=type||'triangle'; o.frequency.value=f;
+  g.gain.setValueAtTime(vol||.05,AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+dur);
+  o.connect(g); g.connect(AC.destination);
+  o.start(); o.stop(AC.currentTime+dur);
+}
+
+/* ============================================================
+   THE FLIP
+   ============================================================ */
+const flipBtn=document.getElementById('flip');
+flipBtn.addEventListener('click',()=>{ audioOn(); toggleFlip(); });
+function toggleFlip(){
+  liberated=!liberated;
+  flipBtn.textContent = liberated ? 'Re-shelve red (compare)' : 'Liberate red';
+  flipBtn.classList.toggle('grey', liberated);
+  if(liberated){ blip(520,.4,'sine',.06); blip(660,.6,'sine',.05); player.charge=1; }
+  else blip(200,.35,'sine',.05);
+  updateReport();
+}
+
+/* ---------- condition report HUD ---------- */
+const reportEl=document.getElementById('report');
+function updateReport(){
+  const cond = player.hits===0 ? 'cracked throughout. Stable.' :
+               `cracked throughout. Abrasions \u2014 ${player.hits}.`;
+  reportEl.innerHTML =
+`<span class="hd">CONDITION REPORT&nbsp;&nbsp;A-17</span>
+OBJECT ......... figure, compacted pigment
+CONDITION ...... ${cond}
+VERMILION ...... ${liberated?'RELEASED \u2014 in circulation':'in storage (grey)'}
+RECOMMENDATION . ${player.hits>=4?'contain':'monitor'}`;
+}
+
+/* ---------- re-shelving ---------- */
+const formEl=document.getElementById('form'), formText=document.getElementById('formText');
+let reshelving=0;
+function reshelve(){
+  splat(player.x,player.y,[45,40,36],26,.28);       // the dark mark stays (§3.6)
+  reshelving=2.2;
+  formText.innerHTML =
+`<b>RE-SHELVING FORM</b>\nOBJECT ......... figure, compacted pigment\nRECOVERED ...... on-site, aisle B-3\nCARRIED PIGMENT  forfeited above working stock\nWORKING STOCK .. issued (standard)\nFILED BY ....... L.H.`;
+  formEl.style.display='flex';
+  player.hits=0; player.x=W/2; player.y=H/2; player.charge=1;
+  ebullets=[];
+  blip(140,.5,'sine',.06);
+  updateReport();
+  setTimeout(()=>formEl.style.display='none',2200);
+}
+
+/* ============================================================
+   UPDATE
+   ============================================================ */
+function update(dt,t){
+  colorT += ((liberated?1:0)-colorT)*Math.min(1,dt*2.2);
+  boilFrame = Math.floor(t*8);
+  if(reshelving>0){ reshelving-=dt; return; }
+
+  // -- player movement
+  let mx=0,my=0;
+  if(keys['w']||keys['arrowup'])my--; if(keys['s']||keys['arrowdown'])my++;
+  if(keys['a']||keys['arrowleft'])mx--; if(keys['d']||keys['arrowright'])mx++;
+  if(moveTouch){
+    const dx=moveTouch.x-moveTouch.ox, dy=moveTouch.y-moveTouch.oy, d=Math.hypot(dx,dy);
+    if(d>8){ mx=dx/d; my=dy/d; }
+  }
+  const ml=Math.hypot(mx,my)||1;
+  player.x+=mx/ml*220*dt; player.y+=my/ml*220*dt;
+  player.x=Math.max(24,Math.min(W-24,player.x));
+  player.y=Math.max(24,Math.min(H-24,player.y));
+
+  // -- aim + fire
+  let firing=false;
+  if(aimTouch){ player.aim=Math.atan2(aimTouch.y-player.y,aimTouch.x-player.x); firing=true; }
+  else { player.aim=Math.atan2(mouse.y-player.y,mouse.x-player.x); firing=mouse.down; }
+  player.fireT-=dt;
+  const canFire = !liberated || player.charge>0.02;
+  if(firing && player.fireT<=0 && canFire){
+    player.fireT=1/9;
+    const a=player.aim+rand(-.05,.05);
+    pbullets.push({x:player.x+Math.cos(a)*16,y:player.y+Math.sin(a)*16,
+      vx:Math.cos(a)*430,vy:Math.sin(a)*430,life:1.4,seed:(Math.random()*999)|0});
+    if(liberated) player.charge=Math.max(0,player.charge-.012);
+    blip(liberated?330:240,.05,'square',.02);
+  }
+  if(liberated) player.charge=Math.min(1,player.charge+.025*dt);
+
+  // -- enemies
+  while(enemies.length < (W<700?7:9)) spawnEnemy(true);
+  for(const e of enemies){
+    const dx=player.x-e.x, dy=player.y-e.y, d=Math.hypot(dx,dy)||1;
+    const tangential = (d-e.orbit)*.9;
+    e.x += (dx/d*tangential - dy/d*46*e.dir)*dt;
+    e.y += (dy/d*tangential + dx/d*46*e.dir)*dt;
+    e.rot += e.spin*dt;
+    e.hurt=Math.max(0,e.hurt-dt*4);
+    e.fireT-=dt;
+    if(e.fireT<=0 && d<W*.7){
+      e.fireT=rand(2.2,3.6);
+      const base=Math.atan2(dy,dx), n=5;
+      for(let i=0;i<n;i++){
+        const a=base+(i-(n-1)/2)*.16;
+        ebullets.push({x:e.x,y:e.y,vx:Math.cos(a)*92,vy:Math.sin(a)*92,
+          life:6,rot:rand(0,7),spin:rand(-3,3),seed:(Math.random()*999)|0});
+      }
+      blip(150,.06,'sawtooth',.012);
+    }
+  }
+
+  // -- enemy bullets
+  for(const b of ebullets){
+    b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt; b.rot+=b.spin*dt;
+    if(Math.hypot(b.x-player.x,b.y-player.y)<player.r-2){
+      b.life=0; player.hits++; shake=.4; blip(90,.15,'sawtooth',.05);
+      updateReport();
+      if(player.hits>=5) reshelve();
+    }
+  }
+  ebullets=ebullets.filter(b=>b.life>0 && b.x>-40&&b.x<W+40&&b.y>-40&&b.y<H+40);
+
+  // -- player bullets
+  for(const b of pbullets){
+    b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt;
+    for(const e of enemies){
+      if(Math.hypot(b.x-e.x,b.y-e.y)<e.r){
+        b.life=0; e.hp--; e.hurt=1;
+        splat(b.x,b.y,redStainTint(),5,.10);
+        blip(420,.04,'triangle',.02);
+        if(e.hp<=0){
+          e.dead=true;
+          splat(e.x,e.y,redStainTint(),e.r*1.5,.16);   // the kill is a brushstroke
+          shake=Math.max(shake,.15); blip(560,.12,'triangle',.04);
+          if(liberated) for(let i=0;i<3;i++)
+            drops.push({x:e.x+rand(-8,8),y:e.y+rand(-8,8),life:9,seed:i*7+e.seed});
+        }
+        break;
+      }
+    }
+  }
+  pbullets=pbullets.filter(b=>b.life>0);
+  enemies=enemies.filter(e=>!e.dead);
+
+  // -- pigment drops (post-liberation economy, §7.2)
+  for(const d of drops){
+    d.life-=dt;
+    const dx=player.x-d.x, dy=player.y-d.y, dist=Math.hypot(dx,dy);
+    if(dist<110){ d.x+=dx/dist*240*dt; d.y+=dy/dist*240*dt; }
+    if(dist<player.r+4){ d.life=0; player.charge=Math.min(1,player.charge+.08); blip(700,.06,'sine',.03); }
+  }
+  drops=drops.filter(d=>d.life>0);
+
+  // -- motes drift
+  for(const m of motes){
+    m.a+=rand(-.5,.5)*dt;
+    m.x+=Math.cos(m.a)*14*m.s; m.y+=Math.sin(m.a)*14*m.s;
+    if(m.x<-10)m.x=W+10; if(m.x>W+10)m.x=-10;
+    if(m.y<-10)m.y=H+10; if(m.y>H+10)m.y=-10;
+  }
+  shake=Math.max(0,shake-dt*2);
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render(t){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.drawImage(paper,0,0,W,H);
+  // permanent stains, matte, under everything alive
+  ctx.globalCompositeOperation='multiply';
+  ctx.drawImage(stains,0,0,W,H);
+  ctx.globalCompositeOperation='source-over';
+
+  if(shake>0){
+    ctx.translate((Math.random()-.5)*shake*10,(Math.random()-.5)*shake*10);
+  }
+
+  // dust-sheeted crates
+  for(const c of crates){
+    watercolor(ctx,(cc,s)=>{
+      blobPath(cc,c.x,c.y,Math.max(c.w,c.h)*.62,10,s,.3);
+    },[208,201,187],[100,94,84],c.seed,{a1:.5,a2:.3,edgeW:2,lineA:.5});
+    // drape lines
+    ctx.strokeStyle='rgba(100,94,84,.3)'; ctx.lineWidth=1;
+    for(let i=0;i<3;i++){
+      ctx.beginPath();
+      ctx.moveTo(c.x-c.w*.3+jit(c.seed,i,2), c.y-c.h*.3+i*c.h*.22);
+      ctx.quadraticCurveTo(c.x+jit(c.seed,i+5,4), c.y-c.h*.1+i*c.h*.24,
+                           c.x+c.w*.34, c.y-c.h*.2+i*c.h*.26);
+      ctx.stroke();
+    }
+  }
+
+  // dust motes — round, soft, grey
+  for(const m of motes){
+    ctx.beginPath();
+    ctx.arc(m.x+jit(m.seed,1,1), m.y+jit(m.seed,2,1), m.r,0,7);
+    ctx.fillStyle='rgba(125,118,106,.35)'; ctx.fill();
+  }
+
+  const rc=redTint();
+
+  // enemy bullets — jagged, same value as motes until red returns
+  for(const b of ebullets){
+    ctx.save(); ctx.translate(b.x,b.y); ctx.rotate(b.rot);
+    ctx.beginPath();
+    shardPath(ctx,0,0,4.6,0,b.seed,1);
+    ctx.fillStyle=css(mix([125,118,106],RED,colorT), .55+colorT*.4);
+    ctx.fill();
+    if(colorT>.05){ // glow only once color exists
+      ctx.beginPath(); ctx.arc(0,0,7,0,7);
+      ctx.fillStyle=css(RED,.12*colorT); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // the guild crowd
+  for(const e of enemies){
+    const tint = e.hurt>0 ? mix(rc,[255,255,255],e.hurt*.5) : rc;
+    watercolor(ctx,(cc,s)=>{
+      shardPath(cc,e.x,e.y,e.r,e.rot,e.seed+s,1);
+    },tint,dark(mix(INK,RED,colorT*.5),.9),e.seed,
+      {a1:.42,a2:.32,edgeW:2.4,lineW:1.3});
+    // facets
+    ctx.strokeStyle=css(dark(tint,.6),.5); ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(e.x+jit(e.seed,31,1),e.y+jit(e.seed,32,1));
+    ctx.lineTo(e.x+Math.cos(e.rot)*e.r*.8, e.y+Math.sin(e.rot)*e.r*.8);
+    ctx.stroke();
+  }
+
+  // player bullets — pigment dabs
+  for(const b of pbullets){
+    const a=Math.atan2(b.vy,b.vx);
+    ctx.save(); ctx.translate(b.x,b.y); ctx.rotate(a);
+    ctx.beginPath(); ctx.ellipse(0,0,7,2.6,0,0,7);
+    ctx.fillStyle=css(mix([90,84,76],RED,colorT),.85); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-8,0,6,1.6,0,0,7);
+    ctx.fillStyle=css(mix([90,84,76],RED,colorT),.3); ctx.fill();
+    ctx.restore();
+  }
+
+  // pigment drops
+  for(const d of drops){
+    ctx.save(); ctx.translate(d.x,d.y); ctx.rotate(t*2+d.seed);
+    ctx.fillStyle=css(RED,.8);
+    ctx.fillRect(-3,-3,6,6);
+    ctx.restore();
+  }
+
+  // -- Payne: the darkest thing on screen, always (§3.3)
+  const p=player;
+  watercolor(ctx,(cc,s)=>{ blobPath(cc,p.x,p.y,p.r,11,s+p.seed,.24); },
+    PAYNE,[15,12,10],p.seed,{a1:.75,a2:.5,edgeW:2,lineW:1.6,mis:1.5});
+  // dry-clay crack texture
+  ctx.strokeStyle='rgba(10,8,7,.5)'; ctx.lineWidth=.8;
+  for(const f of fissures){
+    ctx.beginPath();
+    f.forEach(([fx,fy],i)=>{ const X=p.x+fx+jit(p.seed,i,0.6), Y=p.y+fy+jit(p.seed,i+9,0.6);
+      i===0?ctx.moveTo(X,Y):ctx.lineTo(X,Y); });
+    ctx.stroke();
+  }
+  // fissures glow = charge meter (§3.4), the only additive light in the world
+  if(colorT>.02){
+    ctx.save();
+    ctx.globalCompositeOperation='lighter';
+    ctx.shadowColor=css(RED); ctx.shadowBlur=10*colorT*p.charge+2;
+    ctx.strokeStyle=css([255,90,50], colorT*(.15+.85*p.charge));
+    ctx.lineWidth=1.6;
+    for(const f of fissures){
+      ctx.beginPath();
+      f.forEach(([fx,fy],i)=>{ const X=p.x+fx, Y=p.y+fy;
+        i===0?ctx.moveTo(X,Y):ctx.lineTo(X,Y); });
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // aim tick
+  ctx.strokeStyle=css(mix(INK,RED,colorT),.5); ctx.lineWidth=1.2;
+  ctx.beginPath();
+  ctx.moveTo(p.x+Math.cos(p.aim)*(p.r+4), p.y+Math.sin(p.aim)*(p.r+4));
+  ctx.lineTo(p.x+Math.cos(p.aim)*(p.r+11), p.y+Math.sin(p.aim)*(p.r+11));
+  ctx.stroke();
+
+  // touch joystick ghost
+  if(moveTouch){
+    ctx.strokeStyle='rgba(58,53,44,.25)'; ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.arc(moveTouch.ox,moveTouch.oy,34,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(moveTouch.x,moveTouch.y,10,0,7); ctx.stroke();
+  }
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+resize(); makeCrates(); makeMotes();
+player.x=W/2; player.y=H/2;
+for(let i=0;i<(W<700?7:9);i++) spawnEnemy(false);
+updateReport();
+
+let last=performance.now();
+function frame(now){
+  const t=now/1000;
+  let dt=Math.min(.033,(now-last)/1000); last=now;
+  update(dt,t);
+  render(t);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
