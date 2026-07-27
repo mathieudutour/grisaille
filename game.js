@@ -147,6 +147,25 @@ function resizeStains(){
 function clearRoomStains(){
   roomStains=makeLayer(null);
 }
+/* the hub's layer survives the browser too — a save file you can look at (§3.6) */
+const HUB_STAIN_KEY='grisaille-hubstains-v1';
+function saveHubStains(){
+  try{
+    const c=document.createElement('canvas');
+    c.width=480; c.height=Math.max(1,Math.round(480*H/W));
+    c.getContext('2d').drawImage(hubStains,0,0,c.width,c.height);
+    localStorage.setItem(HUB_STAIN_KEY, c.toDataURL('image/png'));
+  }catch(e){}
+}
+function loadHubStains(){
+  try{
+    const data=localStorage.getItem(HUB_STAIN_KEY);
+    if(!data) return;
+    const img=new Image();
+    img.onload=()=>{ hubStains.getContext('2d').drawImage(img,0,0,W,H); };
+    img.src=data;
+  }catch(e){}
+}
 function activeStains(){ return mode==='raid' ? roomStains : hubStains; }
 function splat(x,y,t,size,alpha){
   const g=activeStains().getContext('2d');
@@ -265,11 +284,25 @@ let timescale=1, cineT=0;
 let reshelving=0, reportT=0, returnT=0;
 
 let crates=[];
-function makeCrates(){
+function makeCrates(kind='sheet',accents=[]){
   crates=[];
+  if(kind==='ruin'){
+    // the unaccessioned territory (§7.6): dereliction instead of order
+    const n = W<700?6:9;
+    for(let i=0;i<n;i++){
+      crates.push({ kind:'rubble', x:rand(W*.1,W*.9), y:rand(H*.12,H*.88),
+        w:rand(24,52), h:rand(20,46), seed:(Math.random()*9999)|0 });
+    }
+    for(let i=0;i<2;i++){
+      crates.push({ kind:'vat', x:rand(W*.15,W*.85), y:rand(H*.2,H*.8),
+        w:rand(56,76), h:0, color:accents[i%Math.max(1,accents.length)]||'grey',
+        seed:(Math.random()*9999)|0 });
+    }
+    return;
+  }
   const n = W<700?4:6;
   for(let i=0;i<n;i++){
-    crates.push({ x:rand(W*.12,W*.88), y:rand(H*.15,H*.85),
+    crates.push({ kind:'sheet', x:rand(W*.12,W*.88), y:rand(H*.15,H*.85),
       w:rand(50,110), h:rand(40,90), seed:(Math.random()*9999)|0 });
   }
 }
@@ -306,6 +339,7 @@ const slots={ delivery:'grey', payload:'grey' };
 
 let enemies=[], ebullets=[], pbullets=[], drops=[], pulses=[], arcs=[], booms=[], patches=[], shake=0;
 let boss=null, telegraphs=[], rings=[], flashes=[], trickleT=0;
+let hubFolk=[], hitstop=0;
 let interactable=null;      // the objective in the current room
 let swatchDrops=[];         // the archive's offering (swatches and one relic)
 let swatches=[];            // the per-run build (§7.3)
@@ -746,6 +780,8 @@ function killEnemy(e){
   killsTotal++;
   splat(e.x,e.y,stainTint(e.faction),e.r*1.5,.16);
   shake=Math.max(shake,.15);
+  hitstop=Math.max(hitstop,.045);
+  booms.push({x:e.x,y:e.y,r:e.r*2.4,t:.18,col:tint(e.faction)});
   blip(560,.12,'triangle',.04);
   // Realgar degrades violently (§3.2): a killed burst takes its neighbours with it
   if(e.type==='burst') detonate(e.x,e.y,80,2);
@@ -1054,7 +1090,7 @@ function reshelve(){
   player.heat=0; player.overheated=false;
   blip(140,.5,'sine',.06);
   setTimeout(()=>formEl.style.display='none',2200);
-  enterHub();                     // the staff carry Payne back to storage
+  enterHub(true);                 // the staff carry Payne back to storage
   updateReport(); updateWeaponHud();
 }
 
@@ -1066,13 +1102,22 @@ function clearField(){
   boss=null; telegraphs=[]; rings=[]; flashes=[]; trickleT=0;
   interactable=null; doors=[]; kiln=null; swatchDrops=[];
 }
-function enterHub(){
+function enterHub(fromRaid=false){
   mode='hub'; raid=null; returnT=0;
   clearField();
   swatches=[]; relics=[];       // the per-run build ends with the run (§7.3, §7.9)
   player.leech=0;
   makeCrates(); makeMotes();
   player.x=W/2; player.y=H*.72;
+  if(fromRaid && ownedColors().length){
+    // every homecoming tracks pigment in (§3.6) — the hub keeps all of it
+    const own=ownedColors();
+    for(let i=0;i<5;i++){
+      const c=own[(Math.random()*own.length)|0];
+      splat(player.x+rand(-30,30), player.y+40+i*22+rand(-8,8), stainTint(c), rand(3,6), .08);
+    }
+    saveHubStains();
+  }
   buildHub();
   updateReport(); updateWeaponHud();
 }
@@ -1094,6 +1139,75 @@ function buildHub(){
       r:30, seed:(act.length*131+7)|0, pulse:0 });
   });
   if(hubDoors.some(d=>SECONDARIES[d.act])) showDialog('kiln_reveal', STORY.kiln_reveal);
+  buildFolk();
+}
+
+/* the hub regains its people as the colours return (§14) */
+const FOLK_LINES={
+  red:[ 'Careful with it. It remembers being used.',
+        'You brought back appetite. Look how hungry everything is already.',
+        'You won the argument. Now we all live in it.' ],
+  blue:[ 'The grief came back with the colour. Thank you. I mean it.',
+         'I remember the pass now. Every name on it.',
+         'The weight is the point. Tell them that, when they complain.' ],
+  yellow:[ 'Everything casts a shadow again.',
+           'I watch people notice things now. It is cruel. It is wonderful.',
+           'Nothing stays hidden any more. Not even the two of us.' ],
+  white:[ '', '',
+          'I still file. Someone must write down what things were,\nwhile they are busy being used.' ],
+};
+function buildFolk(){
+  hubFolk=[];
+  const spots={ red:[.3,.6], blue:[.5,.64], yellow:[.7,.6], white:[.87,.78] };
+  for(const c of ['red','blue','yellow']){
+    if(!lib[c].on) continue;
+    hubFolk.push({ color:c, name:COLORS[c].warden,
+      x:W*spots[c][0], y:H*spots[c][1], seed:(c.length*271+31)|0 });
+  }
+  if(seen.white_out)
+    hubFolk.push({ color:'white', name:'L. HARGREAVES',
+      x:W*spots.white[0], y:H*spots.white[1], seed:997 });
+}
+function folkLine(f){
+  const tier = seen.white_out?2 : ownedColors().length>=5?1:0;
+  return FOLK_LINES[f.color][tier];
+}
+function drawFolk(f,t){
+  const col = f.color==='white' ? [246,243,235] : tint(f.color);
+  if(f.color==='white'){
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    ctx.beginPath(); ctx.arc(f.x,f.y,26,0,7);
+    ctx.fillStyle='rgba(255,253,246,.12)'; ctx.fill();
+    ctx.restore();
+  }
+  // a robed figure, still now, keeping their colour company
+  watercolor(ctx,(cc,s)=>{ blobPath(cc,f.x,f.y,12,9,s+f.seed,.2); },
+    f.color==='white'?[249,246,238]:mix([196,190,176],col,.3), dark(col,.55), f.seed,
+    {a1:.55,a2:.35,edgeW:2,lineW:1.1,lineA:.5,mis:1.2});
+  ctx.beginPath(); ctx.arc(f.x+jit(f.seed,1,.4), f.y-4, 4.6,0,7);
+  ctx.fillStyle='rgba(238,233,221,.95)'; ctx.fill();
+  ctx.strokeStyle='rgba(150,144,132,.5)'; ctx.lineWidth=.8; ctx.stroke();
+  // the seal of their office
+  ctx.beginPath(); ctx.arc(f.x,f.y+4,2.6,0,7);
+  ctx.fillStyle=css(col,.9); ctx.fill();
+  ctx.font='8px "Courier New",monospace'; ctx.textAlign='center';
+  ctx.fillStyle='rgba(58,53,44,.5)';
+  ctx.fillText(f.name, f.x, f.y+26);
+  // come close, and they speak
+  const line=folkLine(f);
+  if(line && Math.hypot(player.x-f.x,player.y-f.y)<85){
+    const rows=line.split('\n');
+    ctx.font='10px "Courier New",monospace';
+    const w=Math.max(...rows.map(r=>ctx.measureText(r).width))+18;
+    const h=rows.length*14+10;
+    let bx=Math.max(w/2+6,Math.min(W-w/2-6,f.x));
+    const by=f.y-34-h;
+    ctx.fillStyle='rgba(238,231,216,.96)';
+    ctx.strokeStyle='rgba(58,53,44,.55)'; ctx.lineWidth=1;
+    ctx.fillRect(bx-w/2,by,w,h); ctx.strokeRect(bx-w/2,by,w,h);
+    ctx.fillStyle='rgba(58,53,44,.85)'; ctx.textAlign='center';
+    rows.forEach((r,i)=>ctx.fillText(r, bx, by+16+i*14));
+  }
 }
 function startRaid(act){
   raid={ act, room:0, state:'combat', endless:act==='endless' };
@@ -1157,10 +1271,18 @@ function roomPlan(act,room){
 function loadRoom(){
   clearField();
   clearRoomStains();
-  makeCrates(); makeMotes();
+  const ruin=!!SECONDARIES[raid.act];
+  makeCrates(ruin?'ruin':'sheet', ruin?SECONDARIES[raid.act].parents:[]);
+  makeMotes();
+  if(ruin){
+    // the district remembers its trade: ancient washes, dried to chalk (§3.6)
+    for(const p of SECONDARIES[raid.act].parents)
+      for(let i=0;i<5;i++)
+        splat(rand(W*.1,W*.9),rand(H*.1,H*.9),stainTint(p),rand(14,34),.05);
+  }
   player.x=60; player.y=H/2;
   const plan=roomPlan(raid.act, raid.room);
-  if(!plan){ enterHub(); return; }
+  if(!plan){ enterHub(true); return; }
   if(plan.type==='combat'){
     raid.state='combat';
     spawnSet(plan.set);
@@ -1554,7 +1676,8 @@ function update(rdt,t){
     lib[c].t += ((lib[c].on?1:0)-lib[c].t)*Math.min(1,rdt*2.2);
   boilFrame = Math.floor(t*8);
   if(cineT>0){ cineT-=rdt; if(cineT<=0) timescale=1; }
-  const dt=rdt*timescale;
+  let dt=rdt*timescale;
+  if(hitstop>0){ hitstop-=rdt; dt*=.15; }   // the brush lifts off the paper for a beat
 
   if(mode==='title') return;
   if(dialogPages) return;         // the world holds still while the paperwork speaks
@@ -1562,7 +1685,7 @@ function update(rdt,t){
 
   reportT-=rdt; if(reportT<=0){ reportT=.3; updateReport();
     if(swatches.some(s=>s.fugitive)) updateWeaponHud(); }
-  if(returnT>0){ returnT-=rdt; if(returnT<=0){ enterHub(); return; } }
+  if(returnT>0){ returnT-=rdt; if(returnT<=0){ enterHub(true); return; } }
 
   // -- player movement
   let mx=0,my=0;
@@ -1930,8 +2053,29 @@ function render(t){
 
   if(shake>0) ctx.translate((Math.random()-.5)*shake*10,(Math.random()-.5)*shake*10);
 
-  // dust-sheeted crates
+  // scenery — dust-sheeted crates, or the ruins of the guild districts
   for(const c of crates){
+    if(c.kind==='rubble'){
+      watercolor(ctx,(cc,s)=>{
+        blobPath(cc,c.x,c.y,Math.max(c.w,c.h)*.6,8,s,.5);
+      },[184,176,160],[92,86,76],c.seed,{a1:.45,a2:.3,edgeW:2,lineA:.45});
+      ctx.strokeStyle='rgba(92,86,76,.35)'; ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.moveTo(c.x-c.w*.3+jit(c.seed,1,2), c.y+jit(c.seed,2,2));
+      ctx.lineTo(c.x+c.w*.28, c.y-c.h*.2+jit(c.seed,3,2));
+      ctx.stroke();
+      continue;
+    }
+    if(c.kind==='vat'){
+      // an old dye vat, its last batch dried inside
+      ctx.beginPath(); blobPath(ctx,c.x,c.y,c.w*.42,10,c.seed,.12);
+      ctx.fillStyle=css(stainTint(c.color),.14); ctx.fill();
+      ctx.beginPath(); blobPath(ctx,c.x,c.y,c.w*.5,10,c.seed,.12);
+      ctx.strokeStyle='rgba(70,64,56,.5)'; ctx.lineWidth=2.4; ctx.stroke();
+      ctx.beginPath(); blobPath(ctx,c.x,c.y,c.w*.36,9,c.seed+3,.18);
+      ctx.strokeStyle=css(dark(stainTint(c.color),.7),.3); ctx.lineWidth=1; ctx.stroke();
+      continue;
+    }
     watercolor(ctx,(cc,s)=>{
       blobPath(cc,c.x,c.y,Math.max(c.w,c.h)*.62,10,s,.3);
     },[208,201,187],[100,94,84],c.seed,{a1:.5,a2:.3,edgeW:2,lineA:.5});
@@ -1964,8 +2108,11 @@ function render(t){
     }
   }
 
-  // hub entrances
-  if(mode==='hub') for(const hd of hubDoors) drawEntrance(hd,t);
+  // hub entrances and the people who came back
+  if(mode==='hub'){
+    for(const hd of hubDoors) drawEntrance(hd,t);
+    for(const f of hubFolk) drawFolk(f,t);
+  }
   // room fixtures
   if(kiln) drawKiln(t);
   if(interactable && interactable.kind!=='kiln') drawInteractable(interactable,t);
@@ -2128,11 +2275,12 @@ function render(t){
     ctx.beginPath(); ctx.arc(pu.x,pu.y, 20+(pu.r-20)*(pu.t/.35),0,7);
     ctx.strokeStyle=css(tint('purple'), .5*pu.t/.35); ctx.lineWidth=2; ctx.stroke();
   }
-  // detonations — expanding rings
+  // detonations and kill pops — expanding rings
   for(const bo of booms){
-    const k=1-bo.t/.25;
+    const T=bo.col?.18:.25;
+    const k=1-bo.t/T;
     ctx.beginPath(); ctx.arc(bo.x,bo.y, bo.r*k,0,7);
-    ctx.strokeStyle=css(tint('orange'), .6*(1-k)); ctx.lineWidth=3*(1-k)+1; ctx.stroke();
+    ctx.strokeStyle=css(bo.col||tint('orange'), .6*(1-k)); ctx.lineWidth=3*(1-k)+1; ctx.stroke();
   }
 
   // pigment drops
@@ -2524,7 +2672,7 @@ beginBtn.addEventListener('click',startGame);
 document.getElementById('btnD').addEventListener('click',()=>{audioOn();cycleSlot('delivery');});
 document.getElementById('btnP').addEventListener('click',()=>{audioOn();cycleSlot('payload');});
 resetBtn.addEventListener('click',()=>{
-  try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
+  try{ localStorage.removeItem(SAVE_KEY); localStorage.removeItem(HUB_STAIN_KEY); }catch(e){}
   location.reload();
 });
 
@@ -2536,9 +2684,10 @@ resetBtn.addEventListener('click',()=>{
   }
 })();
 
-resize(); makeCrates(); makeMotes();
+resize(); loadHubStains(); makeCrates(); makeMotes();
 player.x=W/2; player.y=H/2;
 updateReport();
+addEventListener('beforeunload', saveHubStains);
 
 let last=performance.now();
 function frame(now){
