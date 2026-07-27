@@ -59,14 +59,25 @@ const COLORS = {
          warden:'ULTRAMARINE', tool:'ROLLER', payload:'CHILL', glow:[90,140,255] },
   yellow:{ live:[204,156,26], stain:[176,150,86], grey:[141,137,124],
          warden:'ORPIMENT', tool:'QUILL', payload:'CHAIN', glow:[255,215,80] },
-  /* purple is never liberated — it is FIRED at the kiln (§2.4, §7.6) */
+  /* the secondaries are never liberated — they are FIRED at kilns (§2.4, §7.6) */
+  green:{ live:[104,146,62], stain:[122,142,102], grey:[128,132,122],
+         warden:'SCHEELE', tool:'SPONGE', payload:'LEECH', glow:[150,255,120] },
+  orange:{ live:[204,112,34], stain:[176,136,90], grey:[138,132,120],
+         warden:'REALGAR', tool:'BELLOWS', payload:'DETONATE', glow:[255,170,70] },
   purple:{ live:[118,62,132], stain:[122,96,130], grey:[126,123,128],
          warden:'TYRIAN', tool:'COMPASS', payload:'SINGULARITY', glow:[210,130,255] },
 };
-const COLOR_ORDER=['red','blue','yellow','purple'];
+const COLOR_ORDER=['red','blue','yellow','green','orange','purple'];
+/* each secondary only ever occurred where two colors touched (§2.4) */
+const SECONDARIES={
+  purple:{ parents:['red','blue'],    label:'TYRIAN',          birthType:'spiral', birthN:5 },
+  green: { parents:['blue','yellow'], label:"SCHEELE'S GREEN", birthType:'damask', birthN:4 },
+  orange:{ parents:['red','yellow'],  label:'REALGAR',         birthType:'burst',  birthN:5 },
+};
 
 /* ---------- liberation state (persistent, §6) ---------- */
-const lib = { red:{on:false,t:0}, blue:{on:false,t:0}, yellow:{on:false,t:0}, purple:{on:false,t:0} };
+const lib = { red:{on:false,t:0}, blue:{on:false,t:0}, yellow:{on:false,t:0},
+  green:{on:false,t:0}, orange:{on:false,t:0}, purple:{on:false,t:0} };
 function tint(c){ if(c==='grey') return COLORS.grey.live;
   return mix(COLORS[c].grey, COLORS[c].live, lib[c].t); }
 function stainTint(c){ if(c==='grey') return COLORS.grey.stain;
@@ -74,9 +85,11 @@ function stainTint(c){ if(c==='grey') return COLORS.grey.stain;
 function ownedColors(){ return COLOR_ORDER.filter(c=>lib[c].on); }
 
 const SAVE_KEY='grisaille-save-v1';
-function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify({
-  red:lib.red.on, blue:lib.blue.on, yellow:lib.yellow.on, purple:lib.purple.on,
-  resonance })); }catch(e){} }
+function save(){ try{
+  const s={ res };
+  for(const c of COLOR_ORDER) s[c]=lib[c].on;
+  localStorage.setItem(SAVE_KEY, JSON.stringify(s));
+}catch(e){} }
 function loadSave(){ try{ return JSON.parse(localStorage.getItem(SAVE_KEY)||'null'); }catch(e){ return null; } }
 
 /* ---------- paper (cached) ---------- */
@@ -241,11 +254,11 @@ function blip(f,dur,type,vol){
    WORLD STATE
    ============================================================ */
 let mode='title';           // title | hub | raid
-let raid=null;              // { act, room, state, endless }
+let raid=null;              // { act, room, state, endless, nextPlan }
 let hubDoors=[];            // entrances in the hub
-let door=null;              // exit door of a cleared bay
+let doors=[];               // exit doors of a cleared bay (the route map, §7.5)
 let kiln=null, kilnTemp=0;
-let resonance=0;
+const res={ purple:0, green:0, orange:0 };   // resonance per kiln (§9)
 const RES_MAX=12;
 let killsTotal=0;
 let timescale=1, cineT=0;
@@ -272,8 +285,8 @@ function makeMotes(){
 /* Payne, sediment */
 const player={ x:0,y:0, r:15, aim:0, hits:0, maxHits:6, fireT:0, seed:555,
   inv:0, dashT:0, dashCd:0, dashA:0,
-  heat:0, overheated:false, qT:0, beamT:0, beamA:0,
-  charge:{red:1, blue:1, yellow:1, purple:1} };
+  heat:0, overheated:false, qT:0, beamT:0, beamA:0, leech:0,
+  charge:{red:1, blue:1, yellow:1, green:1, orange:1, purple:1} };
 
 /* fissure network across Payne's back — each seam is one color's meter (§3.4) */
 const fissures=[];
@@ -291,10 +304,11 @@ const fissures=[];
 /* the two-slot weapon (§8.2) */
 const slots={ delivery:'grey', payload:'grey' };
 
-let enemies=[], ebullets=[], pbullets=[], drops=[], pulses=[], arcs=[], shake=0;
+let enemies=[], ebullets=[], pbullets=[], drops=[], pulses=[], arcs=[], booms=[], patches=[], shake=0;
 let interactable=null;      // the objective in the current room
-let swatchDrops=[];         // the archive's offering
+let swatchDrops=[];         // the archive's offering (swatches and one relic)
 let swatches=[];            // the per-run build (§7.3)
+let relics=[];              // archive bureaucracy as an item economy (§7.9)
 
 /* ============================================================
    ENEMIES — the Conservation Staff, then the guilds
@@ -323,6 +337,10 @@ function spawnEnemy(type,edge,px,py){
                           fireT:rand(2,4), ph:rand(0,7) });
   if(type==='spine')   Object.assign(base,{ faction:'yellow', r:14, hp:8, speed:46,
                           aimT:rand(1.5,3), locked:null, lockT:0 });
+  if(type==='damask')  Object.assign(base,{ faction:'green', r:20, hp:13, speed:26,
+                          trailT:0, ph:rand(0,7) });
+  if(type==='burst')   Object.assign(base,{ faction:'orange', r:12, hp:5, speed:118,
+                          fuse:-1 });
   if(type==='spiral')  Object.assign(base,{ faction:'purple', r:16, hp:10, speed:30,
                           fireT:rand(2,4), ph:rand(0,3.8), phased:false });
   enemies.push(base);
@@ -333,10 +351,13 @@ function spawnSet(set){
 }
 
 /* waves are only maintained during the Firing (§7.6) — bays are clear-based */
+const GUILD_TYPE={ red:'shard', blue:'strata', yellow:'spine', green:'damask', orange:'burst', purple:'spiral' };
 function desiredRoster(){
   const small = W<700;
-  if(raid && raid.state==='firing') return { shard: small?4:5, strata: small?4:5 };
-  if(raid && raid.state==='birth')  return { shard:2, strata:2 };
+  if(!raid || !SECONDARIES[raid.act]) return null;
+  const [p1,p2]=SECONDARIES[raid.act].parents;
+  if(raid.state==='firing') return { [GUILD_TYPE[p1]]: small?4:5, [GUILD_TYPE[p2]]: small?4:5 };
+  if(raid.state==='birth')  return { [GUILD_TYPE[p1]]:2, [GUILD_TYPE[p2]]:2 };
   return null;
 }
 function maintainWaves(){
@@ -426,7 +447,26 @@ const SWATCH_POOL=[
     desc:'compass hits harder' },
   { id:'sing_wide',    color:'purple', slot:'payload',  name:'event horizon',
     desc:'singularity pulls wider' },
+  { id:'spore_more',   color:'green',  slot:'delivery', name:'spore bloom',
+    desc:'sponge seeds more spores' },
+  { id:'leech_rich',   color:'green',  slot:'payload',  name:'rich culture',
+    desc:'leech heals sooner' },
+  { id:'frag_tight',   color:'orange', slot:'delivery', name:'choked flue',
+    desc:'bellows spread tighter, +frag' },
+  { id:'deto_big',     color:'orange', slot:'payload',  name:'unstable batch',
+    desc:'detonation reaches wider' },
 ];
+
+/* relics — every one a piece of stationery or lab equipment (§7.9) */
+const RELIC_POOL=[
+  { id:'pigment_vial', name:'pigment vial', desc:'+damage for one colour' },
+  { id:'catalogue_leaf', name:'catalogue leaf', desc:'route doors always labelled' },
+  { id:'humidity_gauge', name:'humidity gauge', desc:'fugitive swatches fade slower' },
+  { id:'crate_seal', name:'crate seal', desc:'archives offer a fourth swatch' },
+  { id:'conservators_key', name:"conservator's key", desc:'opens sealed bays' },
+  { id:'swatch_book', name:'swatch book', desc:'resonance builds twice as fast' },
+];
+function relic(id){ return relics.find(r=>r.id===id)||null; }
 function sw(id){ return swatches.find(s=>s.id===id)||null; }
 function swMag(id,base,perm,fug){
   const s=sw(id); return !s ? base : (s.fugitive ? fug : perm);
@@ -436,24 +476,41 @@ function offerSwatches(){
   const owned=ownedColors();
   const pool=SWATCH_POOL.filter(p=>owned.includes(p.color) && !sw(p.id));
   for(let i=pool.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [pool[i],pool[j]]=[pool[j],pool[i]]; }
-  const n=Math.min(3,pool.length);
-  for(let i=0;i<n;i++){
-    swatchDrops.push({ def:pool[i], fugitive:Math.random()<.4,
-      x:W/2+(i-(n-1)/2)*120, y:H/2, seed:(Math.random()*999)|0 });
+  const nSwatch=Math.min(relic('crate_seal')?4:3, pool.length);
+  const offers=[];
+  for(let i=0;i<nSwatch;i++) offers.push({ kind:'swatch', def:pool[i], fugitive:Math.random()<.4 });
+  // one relic per archive, on the side table
+  const rpool=RELIC_POOL.filter(r=>!relic(r.id));
+  if(rpool.length && Math.random()<.75){
+    const rdef=rpool[(Math.random()*rpool.length)|0];
+    const vial = rdef.id==='pigment_vial'
+      ? owned[(Math.random()*owned.length)|0] : null;
+    offers.push({ kind:'relic', def:rdef, vialColor:vial });
   }
+  offers.forEach((o,i)=>{
+    swatchDrops.push(Object.assign(o,{
+      x:W/2+(i-(offers.length-1)/2)*120, y:H/2, seed:(Math.random()*999)|0 }));
+  });
 }
 function pickSwatch(sd){
-  swatches.push({ id:sd.def.id, name:sd.def.name, color:sd.def.color,
-    fugitive:sd.fugitive, life:sd.fugitive?100:Infinity });
-  splat(sd.x,sd.y,stainTint(sd.def.color),8,.14);
+  if(sd.kind==='relic'){
+    relics.push({ id:sd.def.id, name:sd.def.name + (sd.vialColor?` — ${COLORS[sd.vialColor].warden.toLowerCase()}`:''),
+      vialColor:sd.vialColor });
+    splat(sd.x,sd.y,stainTint(sd.vialColor||'grey'),8,.14);
+  } else {
+    swatches.push({ id:sd.def.id, name:sd.def.name, color:sd.def.color,
+      fugitive:sd.fugitive, life:sd.fugitive?100:Infinity });
+    splat(sd.x,sd.y,stainTint(sd.def.color),8,.14);
+  }
   swatchDrops=[];               // the rest are re-filed
   blip(660,.15,'sine',.05); blip(880,.2,'sine',.04);
   updateWeaponHud();
 }
 function updateSwatches(dt){
   let changed=false;
+  const decay = relic('humidity_gauge') ? .5 : 1;
   for(const s of swatches){
-    if(s.fugitive){ s.life-=dt; if(s.life<=0) changed=true; }
+    if(s.fugitive){ s.life-=dt*decay; if(s.life<=0) changed=true; }
   }
   if(changed){
     swatches=swatches.filter(s=>s.life>0);   // fugitive pigment fades in the light
@@ -470,6 +527,8 @@ const DELIVERY={
   red:   { rate:10, cost:.012 }, // Brush — rapid stream, short range
   blue:  { rate:2.3,cost:.035 }, // Roller — arcing lob, splash
   yellow:{ rate:0,  cost:.006 }, // Quill — hitscan beam, overheats (cost per tick)
+  green: { rate:2.8,cost:.03 },  // Sponge — seeking spores, slow, persistent
+  orange:{ rate:1.8,cost:.04 },  // Bellows — cluster burst, shotgun spread
   purple:{ rate:3.5,cost:.028 }, // Compass — phase bolt, pierces a line
 };
 function cycleSlot(which){
@@ -518,6 +577,37 @@ function fireWeapon(){
       life:.5, dmg:(mono?2.2:1.3)*swMag('bolt_dmg',1,1.6,2), col, mono, hitList:[],
       dCost:mono?spec.cost*2:spec.cost, pCost:.01, seed:(Math.random()*999)|0 });
     blip(500,.07,'sine',.025);
+  } else if(d==='green'){
+    // Sponge: slow seeking spores, persistent
+    const n=(mono?4:3)+swMag('spore_more',0,1,2);
+    for(let i=0;i<n;i++){
+      const a=player.aim+rand(-.5,.5);
+      pbullets.push({ kind:'spore', x:player.x+Math.cos(a)*14, y:player.y+Math.sin(a)*14,
+        vx:Math.cos(a)*140, vy:Math.sin(a)*140,
+        life:4, dmg:mono?2:1.2, col, mono,
+        dCost:0, pCost:0, seed:(Math.random()*999)|0 });
+    }
+    const shot={dCost:mono?spec.cost*2:spec.cost, pCost:.018};
+    drainFor(shot);
+    blip(220,.1,'sine',.03);
+    player.fireT=1/spec.rate;
+    return;
+  } else if(d==='orange'){
+    // Bellows: a cluster burst of short-lived fragments
+    const n=(mono?7:6)+swMag('frag_tight',0,1,2);
+    const spread=swMag('frag_tight',.35,.22,.16);
+    for(let i=0;i<n;i++){
+      const a=player.aim+rand(-spread,spread);
+      pbullets.push({ kind:'dab', x:player.x+Math.cos(a)*16, y:player.y+Math.sin(a)*16,
+        vx:Math.cos(a)*rand(380,460), vy:Math.sin(a)*rand(380,460),
+        life:.38, dmg:mono?1.6:1, col, mono, pierce:1, hitList:[],
+        dCost:0, pCost:0, seed:(Math.random()*999)|0 });
+    }
+    const shot={dCost:mono?spec.cost*2:spec.cost, pCost:.02};
+    drainFor(shot);
+    blip(120,.12,'sawtooth',.035);
+    player.fireT=1/spec.rate;
+    return;
   } else {
     const spread = d==='red'?.09:.05;
     const a=player.aim+rand(-spread,spread);
@@ -570,7 +660,37 @@ function applyPayload(e,strong,hx,hy,emitPulse=true){
     e.chill=Math.min(5, e.chill+(strong?2:1)+swMag('chill_fast',0,1,2));
     if(e.chill>=5 && e.frozen<=0){ e.frozen=1.3; blip(700,.15,'sine',.04); }
   }
+  if(p==='green') leech(hx,hy);
+  if(p==='orange' && emitPulse) detonate(hx,hy, 60*swMag('deto_big',1,1.4,1.8), 1.5);
   if(p==='purple' && emitPulse) singularity(hx,hy);
+}
+/* the Leech (§8.4): heals the player, leaves a creeping hazard patch */
+function leech(x,y){
+  player.leech++;
+  const need=swMag('leech_rich',8,6,4);
+  if(player.leech>=need && player.hits>0){
+    player.leech=0; player.hits--;
+    blip(520,.2,'sine',.05); blip(650,.3,'sine',.04);
+    updateReport();
+  }
+  if(!patches.some(p=>p.owner==='player'&&Math.hypot(p.x-x,p.y-y)<20))
+    patches.push({x,y,r:22,t:4,T:4,owner:'player',seed:(Math.random()*999)|0});
+}
+/* the Detonate (§8.4): area blast, knockback */
+function detonate(x,y,r,dmg){
+  booms.push({x,y,r,t:.25});
+  splat(x,y,stainTint('orange'),r*.3,.12);
+  shake=Math.max(shake,.18);
+  blip(90,.25,'sawtooth',.05);
+  for(const e of enemies){
+    if(e.dead||e.phased) continue;
+    const dx=e.x-x, dy=e.y-y, d=Math.hypot(dx,dy)||1;
+    if(d<r+e.r){
+      e.hp-=dmg*dmgMult(e); e.hurt=1;
+      e.x+=dx/d*40; e.y+=dy/d*40;      // knockback
+      if(e.hp<=0) killEnemy(e);
+    }
+  }
 }
 function singularity(x,y){
   pulses.push({x,y,t:.35,r:130*swMag('sing_wide',1,1.55,2)});
@@ -598,6 +718,8 @@ function dmgMult(e){
   if(slots.delivery===e.faction) m*=.45;
   if(slots.payload===e.faction && slots.payload!=='grey') m*=.45;
   if(e.frozen>0) m*=1.5;
+  const vial=relic('pigment_vial');
+  if(vial && (slots.delivery===vial.vialColor || slots.payload===vial.vialColor)) m*=1.3;
   return m;
 }
 
@@ -618,6 +740,8 @@ function killEnemy(e){
   splat(e.x,e.y,stainTint(e.faction),e.r*1.5,.16);
   shake=Math.max(shake,.15);
   blip(560,.12,'triangle',.04);
+  // Realgar degrades violently (§3.2): a killed burst takes its neighbours with it
+  if(e.type==='burst') detonate(e.x,e.y,80,2);
   if(e.frozen>0){ splat(e.x,e.y,stainTint('blue'),e.r*2,.12); blip(880,.2,'sine',.04); }
   // burn spreads on death (§8.4)
   if(e.burn>0) for(const o of enemies)
@@ -630,27 +754,33 @@ function killEnemy(e){
     const c=ownedColors()[Math.random()*ownedColors().length|0];
     drops.push({x:e.x, y:e.y, color:c, life:9, seed:e.seed});
   }
-  // resonance (§9): purple-tinted kills reveal the kiln
-  if(isMixedRB() && !lib.purple.on){
-    resonance=Math.min(RES_MAX,resonance+1); save();
-    if(resonance>=RES_MAX && mode==='hub') buildHub();
+  // resonance (§9): mixed kills tint the world toward each kiln
+  for(const sec in SECONDARIES){
+    if(lib[sec].on || !isMixedFor(sec)) continue;
+    res[sec]=Math.min(RES_MAX, res[sec]+(relic('swatch_book')?2:1));
+    save();
+    if(res[sec]>=RES_MAX && mode==='hub') buildHub();
   }
   // the Firing (§7.6): only kills made with the target mix feed the kiln
-  if(raid && raid.state==='firing' && isMixedRB()){
+  if(raid && raid.state==='firing' && SECONDARIES[raid.act] && isMixedFor(raid.act)){
     kilnTemp=Math.min(1,kilnTemp+.075);
     blip(620,.08,'sine',.03);
   }
-  // the birth phase ends when the player survives their own creation
-  if(e.birth && !enemies.some(o=>o!==e && !o.dead && o.birth)){
-    liberate('purple');
-    if(kiln){ splat(kiln.x,kiln.y,stainTint('purple'),44,.2); }
-    if(raid) raid.state='done';
-    returnT=3;
-  }
+  birthCheck(e);
 }
-function isMixedRB(){
-  return (slots.delivery==='red'&&slots.payload==='blue') ||
-         (slots.delivery==='blue'&&slots.payload==='red');
+/* the birth phase ends when the player survives their own creation */
+function birthCheck(e){
+  if(!e.birth || enemies.some(o=>o!==e && !o.dead && o.birth)) return;
+  const sec=raid?raid.act:'purple';
+  liberate(sec);
+  if(kiln){ splat(kiln.x,kiln.y,stainTint(sec),44,.2); }
+  if(raid) raid.state='done';
+  returnT=3;
+}
+function isMixedFor(sec){
+  const [a,b]=SECONDARIES[sec].parents;
+  return (slots.delivery===a&&slots.payload===b) ||
+         (slots.delivery===b&&slots.payload===a);
 }
 
 /* ============================================================
@@ -664,23 +794,33 @@ const comboEl=document.getElementById('comboName');
 const slotDEl=document.getElementById('slotD'), slotPEl=document.getElementById('slotP');
 const heatWrap=document.getElementById('heatWrap'), heatBar=document.getElementById('heatBar');
 const swatchListEl=document.getElementById('swatchList');
-const meterRows={ red:document.querySelector('#meterRed'), blue:document.querySelector('#meterBlue'),
-  yellow:document.querySelector('#meterYellow'), purple:document.querySelector('#meterPurple') };
-const resRow=document.querySelector('#meterRes'), kilnRow=document.querySelector('#meterKiln');
+const meterRows={};
+for(const c of COLOR_ORDER)
+  meterRows[c]=document.querySelector('#meter'+c[0].toUpperCase()+c.slice(1));
+const resRows={ purple:document.querySelector('#meterResPurple'),
+  green:document.querySelector('#meterResGreen'), orange:document.querySelector('#meterResOrange') };
+const kilnRow=document.querySelector('#meterKiln');
 
 const ACT_LABEL={
   red:'THE INVENTORY', blue:'VAULT OF ULTRAMARINE',
-  yellow:'THE BURIED VAULT', purple:'THE UNACCESSIONED TERRITORY',
+  yellow:'THE BURIED VAULT',
+  purple:'KILN — TYRIAN', green:"KILN — SCHEELE'S GREEN", orange:'KILN — REALGAR',
   endless:'THE PROCESSING FLOORS',
 };
+function unfiredSecondaries(){ return Object.keys(SECONDARIES).filter(s=>!lib[s].on); }
 function objectiveText(){
   if(mode==='hub'){
     if(!lib.red.on) return 'report to the inventory';
     if(!lib.blue.on) return 'the vault of ultramarine stands open';
     if(!lib.yellow.on) return 'the buried vault is catalogued. dig.';
-    if(!lib.purple.on) return resonance>=RES_MAX
-      ? 'the kiln is revealed. enter the unaccessioned territory.'
-      : `fire mixed red+blue pigment — resonance ${resonance}/${RES_MAX}`;
+    const unfired=unfiredSecondaries();
+    if(unfired.length){
+      const ready=unfired.filter(s=>res[s]>=RES_MAX);
+      if(ready.length) return `${ready.length===1?'a kiln is':'kilns are'} revealed. enter the unaccessioned territory.`;
+      const next=unfired.sort((a,b)=>res[b]-res[a])[0];
+      const [p1,p2]=SECONDARIES[next].parents;
+      return `fire mixed ${p1}+${p2} pigment — resonance ${res[next]}/${RES_MAX}`;
+    }
     return `restoration ongoing — ${killsTotal} accessions struck`;
   }
   if(!raid) return 'awaiting accession';
@@ -688,23 +828,23 @@ function objectiveText(){
   const bay=raid.endless?`processing floor ${raid.room+1}`:`bay ${raid.room+1}`;
   switch(raid.state){
     case 'combat':  return `${bay} — ${alive} to process`;
-    case 'cleared': return `${bay} processed. proceed.`;
-    case 'archive': return 'archive — select one swatch, or proceed';
+    case 'cleared': return `${bay} processed. choose a route.`;
+    case 'archive': return 'archive — select one item, or proceed';
     case 'objective':
       if(raid.act==='red') return 'the forge is exposed. touch it.';
       if(raid.act==='blue') return 'the hatch is open. enter.';
       if(raid.act==='yellow') return 'the buried door. unearth it.';
-      if(raid.act==='purple') return 'the kiln. light it.';
+      if(SECONDARIES[raid.act]) return 'the kiln. light it.';
       return bay;
     case 'firing':  return `HOLD THE MIX — kiln at ${Math.round(kilnTemp*100)}%`;
-    case 'birth':   return 'the first purple things. survive your creation.';
+    case 'birth':   return `the first ${raid.act} things. survive your creation.`;
     case 'done':    return 'accession complete. returning to storage.';
   }
   return 'awaiting accession';
 }
-function tyrianLine(){
-  if(lib.purple.on) return 'FIRED — no record exists';
-  if(raid&&(raid.state==='firing'||raid.state==='birth')) return 'firing in progress';
+function secondaryLine(sec){
+  if(lib[sec].on) return 'FIRED — no record exists';
+  if(raid&&raid.act===sec&&(raid.state==='firing'||raid.state==='birth')) return 'firing in progress';
   return 'unfired — never existed';
 }
 function updateReport(){
@@ -717,7 +857,9 @@ CONDITION ...... ${cond}
 VERMILION ...... ${lib.red.on?'RELEASED — in circulation':'in storage (grey)'}
 ULTRAMARINE .... ${lib.blue.on?'RELEASED — in circulation':'submerged (grey)'}
 ORPIMENT ....... ${lib.yellow.on?'RELEASED — in circulation':'buried (grey)'}
-TYRIAN ......... ${tyrianLine()}
+SCHEELE ........ ${secondaryLine('green')}
+REALGAR ........ ${secondaryLine('orange')}
+TYRIAN ......... ${secondaryLine('purple')}
 OBJECTIVE ...... ${objectiveText()}
 RECOMMENDATION . ${player.hits>=player.maxHits-1?'contain':'monitor'}`;
 }
@@ -730,10 +872,12 @@ function updateWeaponHud(){
   slotPEl.textContent = COLORS[slots.payload].warden.toLowerCase();
   slotDEl.style.color = css(tint(slots.delivery));
   slotPEl.style.color = css(tint(slots.payload));
-  swatchListEl.innerHTML = swatches.map(s=>{
+  const swatchLines = swatches.map(s=>{
     const life = s.fugitive ? ` (fugitive ${Math.max(0,s.life)|0}s)` : '';
     return `<span style="color:${css(tint(s.color))}">■</span> ${s.name}${life}`;
-  }).join('<br>');
+  });
+  const relicLines = relics.map(r=>`▤ ${r.name}`);
+  swatchListEl.innerHTML = swatchLines.concat(relicLines).join('<br>');
 }
 function updateMeters(){
   for(const c of COLOR_ORDER){
@@ -745,12 +889,15 @@ function updateMeters(){
       bar.style.background=css(tint(c),.8);
     }
   }
-  const showRes = lib.blue.on && !lib.purple.on && resonance<RES_MAX;
-  resRow.classList.toggle('on', showRes);
-  if(showRes){
-    const bar=resRow.querySelector('i');
-    bar.style.width=(resonance/RES_MAX*100)+'%';
-    bar.style.background=css(COLORS.purple.live,.6);
+  for(const sec in resRows){
+    const [p1,p2]=SECONDARIES[sec].parents;
+    const show = lib[p1].on && lib[p2].on && !lib[sec].on;
+    resRows[sec].classList.toggle('on', show);
+    if(show){
+      const bar=resRows[sec].querySelector('i');
+      bar.style.width=(res[sec]/RES_MAX*100)+'%';
+      bar.style.background=css(COLORS[sec].live,.6);
+    }
   }
   const showKiln = raid&&raid.state==='firing';
   kilnRow.classList.toggle('on', !!showKiln);
@@ -768,8 +915,8 @@ function updateMeters(){
 }
 function showStamp(color,lines,dur){
   stampEl.textContent=lines;
-  stampEl.classList.remove('blue','purple','yellow');
-  if(color==='blue'||color==='purple'||color==='yellow') stampEl.classList.add(color);
+  stampEl.classList.remove('blue','purple','yellow','green','orange');
+  if(['blue','purple','yellow','green','orange'].includes(color)) stampEl.classList.add(color);
   stampEl.classList.add('show');
   setTimeout(()=>stampEl.classList.remove('show'), dur||2600);
 }
@@ -797,13 +944,14 @@ function reshelve(){
    HUB & RAIDS (§7.5)
    ============================================================ */
 function clearField(){
-  enemies=[]; ebullets=[]; pbullets=[]; drops=[]; pulses=[]; arcs=[];
-  interactable=null; door=null; kiln=null; swatchDrops=[];
+  enemies=[]; ebullets=[]; pbullets=[]; drops=[]; pulses=[]; arcs=[]; booms=[]; patches=[];
+  interactable=null; doors=[]; kiln=null; swatchDrops=[];
 }
 function enterHub(){
   mode='hub'; raid=null; returnT=0;
   clearField();
-  swatches=[];                  // the per-run build ends with the run (§7.3)
+  swatches=[]; relics=[];       // the per-run build ends with the run (§7.3, §7.9)
+  player.leech=0;
   makeCrates(); makeMotes();
   player.x=W/2; player.y=H*.72;
   buildHub();
@@ -817,10 +965,11 @@ function buildHub(){
   else if(!lib.yellow.on) acts.push('yellow');
   else {
     acts.push('endless');
-    if(!lib.purple.on && resonance>=RES_MAX) acts.push('purple');
+    for(const sec of unfiredSecondaries())
+      if(res[sec]>=RES_MAX) acts.push(sec);
   }
   acts.forEach((act,i)=>{
-    hubDoors.push({ act, x:W*(.5+(i-(acts.length-1)/2)*.3), y:H*.3,
+    hubDoors.push({ act, x:W*(.5+(i-(acts.length-1)/2)*.24), y:H*.3,
       r:30, seed:(act.length*131+7)|0, pulse:0 });
   });
 }
@@ -830,14 +979,35 @@ function startRaid(act){
   blip(392,.2,'sine',.04);
 }
 /* what lives in each bay */
+function endlessSet(k,bias){
+  const small=W<700, s=small?-1:0;
+  const set={ plaster:3+k+s, husk:1+Math.floor(k/2),
+    shard:2+k+s, strata:2+k+s, spine:1+k+s };
+  if(lib.green.on) set.damask=1+Math.floor(k/2);
+  if(lib.orange.on) set.burst=1+k+s;
+  if(lib.purple.on) set.spiral=1+Math.floor(k/2);
+  if(bias && set[GUILD_TYPE[bias]]!==undefined) set[GUILD_TYPE[bias]]+=3;
+  return set;
+}
+function kilnRaidPlan(sec,room){
+  const small=W<700, s=small?-1:0;
+  const [p1,p2]=SECONDARIES[sec].parents;
+  const g1=GUILD_TYPE[p1], g2=GUILD_TYPE[p2];
+  return [
+    {type:'combat', set:{[g1]:4+s,[g2]:4+s}},
+    {type:'combat', set:{[g1]:5+s,[g2]:5+s,plaster:3}},
+    {type:'archive'},
+    {type:'objective'},
+  ][room]||null;
+}
 function roomPlan(act,room){
   const small=W<700, s=small?-1:0;
   if(act==='endless'){
-    if(room%4===3) return {type:'archive'};
-    const k=Math.floor(room/3);
-    return {type:'combat', set:{ plaster:3+k+s, husk:1+Math.floor(k/2),
-      shard:2+k+s, strata:2+k+s, spine:1+k+s, spiral:lib.purple.on?1+Math.floor(k/2):0 }};
+    // the branching route decided this room's plan (§7.5)
+    if(raid.nextPlan){ const p=raid.nextPlan; raid.nextPlan=null; return p; }
+    return {type:'combat', set:endlessSet(0,null)};
   }
+  if(SECONDARIES[act]) return kilnRaidPlan(act,room);
   const plans={
     red:[ {type:'combat', set:{plaster:5+s,husk:1}},
           {type:'combat', set:{plaster:7+s,husk:2}},
@@ -848,10 +1018,6 @@ function roomPlan(act,room){
            {type:'objective'} ],
     yellow:[ {type:'combat', set:{plaster:3,shard:3+s,strata:3+s}},
              {type:'combat', set:{shard:4+s,strata:4+s,husk:1}},
-             {type:'archive'},
-             {type:'objective'} ],
-    purple:[ {type:'combat', set:{shard:4+s,strata:4+s}},
-             {type:'combat', set:{shard:5+s,strata:5+s,spine:2}},
              {type:'archive'},
              {type:'objective'} ],
   };
@@ -870,35 +1036,71 @@ function loadRoom(){
   } else if(plan.type==='archive'){
     raid.state='archive';
     offerSwatches();
-    placeDoor();
+    placeDoors();
   } else if(plan.type==='objective'){
     raid.state='objective';
     placeObjective(raid.act);
   }
   updateReport();
 }
-function placeDoor(){
-  door={ x:W-36, y:H/2, r:26, seed:77 };
+/* the route map (§7.5): cleared bays open onto labelled routes.
+   In the endless floors the branch chooses what you fight — and
+   therefore which pigment you harvest. Cross-harvest as routing. */
+function placeDoors(){
+  doors=[];
+  if(!raid.endless){
+    doors.push({ x:W-36, y:H/2, r:26, seed:77, label:'NEXT BAY', plan:null, locked:false });
+    return;
+  }
+  const level=raid.room+1;
+  const archiveDue = level%4===3;
+  const guilds=['red','blue','yellow'].concat(unfiredSecondaries().length<3?ownedColors().filter(c=>SECONDARIES[c]):[]);
+  const pick=()=>guilds[(Math.random()*guilds.length)|0];
+  const k=Math.floor(level/3);
+  const opts=[];
+  if(archiveDue) opts.push({ label:'ARCHIVE', plan:{type:'archive'} });
+  const b1=pick();
+  opts.push({ label:labelFor(b1), plan:{type:'combat', set:endlessSet(k,b1)}, bias:b1 });
+  if(!archiveDue && Math.random()<.7){
+    let b2=pick(); if(b2===b1) b2=null;
+    opts.push({ label:b2?labelFor(b2):'SHROUD BAY', plan:{type:'combat', set:endlessSet(k,b2)}, bias:b2 });
+  }
+  // a sealed bay, sometimes — an archive shortcut for keyholders (§7.9)
+  if(!archiveDue && Math.random()<.3){
+    opts.push({ label:'SEALED BAY', plan:{type:'archive'}, locked:true });
+  }
+  opts.forEach((o,i)=>{
+    let label=o.label;
+    // uncatalogued routes read as "?" unless the leaf is held (§7.9)
+    if(!o.locked && !relic('catalogue_leaf') && Math.random()<.4) label='UNCATALOGUED';
+    doors.push({ x:W-36, y:H*(.5+(i-(opts.length-1)/2)*.28), r:26,
+      seed:77+i*13, label, plan:o.plan, locked:!!o.locked });
+  });
 }
-function nextRoom(){
+function labelFor(color){
+  return COLORS[color].warden+' BAY';
+}
+function nextRoom(d){
+  if(raid.endless && d && d.plan) raid.nextPlan=d.plan;
   raid.room++;
   blip(494,.12,'sine',.04);
   loadRoom();
 }
 function placeObjective(act){
   const x=W*.72, y=H/2;
-  if(act==='purple'){
-    kiln={ x, y, r:30, seed:(Math.random()*999)|0 };
+  if(SECONDARIES[act]){
+    kiln={ x, y, r:30, seed:(Math.random()*999)|0, sec:act };
     interactable={ kind:'kiln', x, y, r:30, seed:kiln.seed, pulse:0 };
     // parents guard their kiln
-    for(let i=0;i<3;i++){ spawnEnemy('shard',false, x+rand(-180,-60), y+rand(-160,160));
-                          spawnEnemy('strata',false, x+rand(-180,-60), y+rand(-160,160)); }
+    const [p1,p2]=SECONDARIES[act].parents;
+    for(let i=0;i<3;i++){ spawnEnemy(GUILD_TYPE[p1],false, x+rand(-180,-60), y+rand(-160,160));
+                          spawnEnemy(GUILD_TYPE[p2],false, x+rand(-180,-60), y+rand(-160,160)); }
     return;
   }
   const kind = act==='red'?'forge' : act==='blue'?'hatch' : 'barrow';
   interactable={ kind, x, y, r:26, seed:(Math.random()*999)|0, pulse:0 };
   // its keepers, still in storage, rendered grey — the crowd you cannot yet read (§4)
-  const guard = act==='red'?'shard' : act==='blue'?'strata' : 'spine';
+  const guard = GUILD_TYPE[act];
   const n = W<700?4:5;
   for(let i=0;i<n;i++){
     const a=(i/n)*Math.PI*2;
@@ -913,14 +1115,14 @@ function liberate(color){
   if(color==='red'){ slots.delivery='red'; slots.payload='red'; }
   timescale=.22; cineT=1.7;
   // secondaries are not released from storage — they are made (§2.4)
-  const stampText = color==='purple'
-    ? 'TYRIAN — FIRED\ncondition: new. no record exists.'
+  const stampText = SECONDARIES[color]
+    ? `${SECONDARIES[color].label} — FIRED\ncondition: new. no record exists.`
     : `${COLORS[color].warden} — RELEASED\ncondition: fugitive. in circulation.`;
   showStamp(color, stampText, 3000);
   blip(520,.5,'sine',.06); blip(660,.8,'sine',.05);
   if(color==='blue') setTimeout(()=>blip(392,.8,'sine',.04),150);
   if(color==='yellow') setTimeout(()=>blip(587,.7,'sine',.045),150);
-  if(color==='purple') setTimeout(()=>blip(311,.9,'sine',.045),150);
+  if(SECONDARIES[color]) setTimeout(()=>blip(311,.9,'sine',.045),150);
   updateReport(); updateWeaponHud();
 }
 
@@ -935,9 +1137,15 @@ function touchThings(){
     return;
   }
   if(!raid) return;
-  // bay exit door
-  if(door && Math.hypot(player.x-door.x,player.y-door.y)<door.r+player.r){
-    door=null; nextRoom(); return;
+  // bay exit doors — the route map
+  for(const d of doors){
+    if(Math.hypot(player.x-d.x,player.y-d.y)<d.r+player.r){
+      if(d.locked && !relic('conservators_key')){
+        if(!d.rattled){ d.rattled=true; blip(110,.15,'square',.04); }
+        continue;
+      }
+      doors=[]; nextRoom(d); return;
+    }
   }
   // archive offering
   for(const sd of swatchDrops){
@@ -951,7 +1159,8 @@ function touchThings(){
   if(kind==='kiln'){
     interactable=null;
     raid.state='firing'; kilnTemp=.2;
-    showStamp('purple','THE FIRING\nonly the mix feeds the kiln', 2600);
+    const [p1,p2]=SECONDARIES[raid.act].parents;
+    showStamp(raid.act,`THE FIRING\nonly ${p1}+${p2} feeds the kiln`, 2600);
     blip(392,.4,'sine',.05); blip(311,.6,'sine',.04);
     updateReport();
     return;
@@ -966,16 +1175,16 @@ function touchThings(){
 
 /* the final minute of the Firing: the new color is born, hostile (§7.6.5) */
 function birthPhase(){
+  const sec=raid.act, def=SECONDARIES[sec];
   raid.state='birth';
   timescale=.25; cineT=1.4;
-  splat(kiln.x,kiln.y,stainTint('purple'),40,.2);
-  const n=5;
-  for(let i=0;i<n;i++){
-    const a=(i/n)*Math.PI*2;
-    const e=spawnEnemy('spiral',false, kiln.x+Math.cos(a)*80, kiln.y+Math.sin(a)*80);
+  splat(kiln.x,kiln.y,stainTint(sec),40,.2);
+  for(let i=0;i<def.birthN;i++){
+    const a=(i/def.birthN)*Math.PI*2;
+    const e=spawnEnemy(def.birthType,false, kiln.x+Math.cos(a)*80, kiln.y+Math.sin(a)*80);
     e.birth=true;
   }
-  showStamp('purple','THE KILN FIRES\nthe first purple thing turns on you', 2800);
+  showStamp(sec,`THE KILN FIRES\nthe first ${sec} thing turns on you`, 2800);
   blip(392,.5,'sine',.05); blip(466,.7,'sine',.05); blip(554,.9,'sine',.04);
 }
 
@@ -1049,7 +1258,7 @@ function update(rdt,t){
       if(kilnTemp<=0){
         raid.state='objective';
         interactable={ kind:'kiln', x:kiln.x, y:kiln.y, r:30, seed:kiln.seed, pulse:0 };
-        showStamp('purple','THE KILN COOLS\nlight it again', 2000);
+        showStamp(raid.act,'THE KILN COOLS\nlight it again', 2000);
         blip(120,.4,'sine',.05);
       }
     }
@@ -1058,7 +1267,7 @@ function update(rdt,t){
   // -- room cleared?
   if(raid && raid.state==='combat' && !enemies.some(e=>!e.dead)){
     raid.state='cleared';
-    placeDoor();
+    placeDoors();
     blip(523,.2,'sine',.05); blip(659,.3,'sine',.04);
     updateReport();
   }
@@ -1132,6 +1341,37 @@ function update(rdt,t){
         blip(95,.12,'sine',.02);
       }
     }
+    if(e.type==='damask'){
+      // Scheele's Green: not a body — a motif that creeps (§3.2)
+      e.ph+=dt;
+      e.rot+=dt*.3;
+      e.x+=dx/d*e.speed*slow*dt + Math.cos(e.ph*1.3)*10*dt;
+      e.y+=dy/d*e.speed*slow*dt + Math.sin(e.ph*1.1)*10*dt;
+      e.trailT-=dt;
+      if(e.trailT<=0){
+        e.trailT=.8;
+        patches.push({x:e.x,y:e.y,r:20,t:3.5,T:3.5,owner:'enemy',seed:e.seed+patches.length});
+      }
+      if(d<e.r+player.r && e.contactCd<=0){ e.contactCd=.9; hurtPlayer(); }
+    }
+    if(e.type==='burst'){
+      // Realgar: it bursts. Run.
+      if(e.fuse>=0){
+        e.fuse-=dt;
+        if(e.fuse<=0){
+          e.dead=true;
+          detonate(e.x,e.y,90,2);
+          if(Math.hypot(player.x-e.x,player.y-e.y)<70+player.r) hurtPlayer();
+          splat(e.x,e.y,stainTint('orange'),e.r*2,.16);
+          birthCheck(e);
+          continue;
+        }
+      } else {
+        e.x+=dx/d*e.speed*slow*dt; e.y+=dy/d*e.speed*slow*dt;
+        e.rot+=dt*3;
+        if(d<70){ e.fuse=.7; blip(1100,.1,'square',.03); }
+      }
+    }
     if(e.type==='spine'){
       // Orpiment snipes from range and lights the player up (§3.2)
       e.rot+=dt*.4;
@@ -1203,6 +1443,22 @@ function update(rdt,t){
       } else b.life=1;
       continue;
     }
+    if(b.kind==='spore'){
+      // Sponge spores seek the nearest living thing
+      let best=null, bd=1e9;
+      for(const e of enemies){
+        if(e.dead||e.phased) continue;
+        const dd=Math.hypot(e.x-b.x,e.y-b.y);
+        if(dd<bd){ bd=dd; best=e; }
+      }
+      if(best){
+        const a=Math.atan2(best.y-b.y,best.x-b.x);
+        const cur=Math.atan2(b.vy,b.vx);
+        let diff=a-cur; while(diff>Math.PI)diff-=Math.PI*2; while(diff<-Math.PI)diff+=Math.PI*2;
+        const na=cur+Math.sign(diff)*Math.min(Math.abs(diff), 3.2*dt);
+        b.vx=Math.cos(na)*150; b.vy=Math.sin(na)*150;
+      }
+    }
     b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt;
     for(const e of enemies){
       if(e.dead || e.phased) continue;
@@ -1247,6 +1503,25 @@ function update(rdt,t){
   pulses=pulses.filter(p=>p.t>0);
   for(const a of arcs) a.t-=dt;
   arcs=arcs.filter(a=>a.t>0);
+  for(const bo of booms) bo.t-=dt;
+  booms=booms.filter(b=>b.t>0);
+
+  // -- pigment patches: leech pools hurt the guilds, damask trails hurt Payne
+  for(const p of patches){
+    p.t-=dt;
+    if(p.owner==='player'){
+      for(const e of enemies){
+        if(e.dead||e.phased||e.faction==='green') continue;
+        if(Math.hypot(e.x-p.x,e.y-p.y)<p.r+e.r*.5){
+          e.hp-=.9*dt; e.hurt=Math.max(e.hurt,.3);
+          if(e.hp<=0) killEnemy(e);
+        }
+      }
+    } else {
+      if(Math.hypot(player.x-p.x,player.y-p.y)<p.r+player.r*.4) hurtPlayer();
+    }
+  }
+  patches=patches.filter(p=>p.t>0);
 
   // -- motes drift
   for(const m of motes){
@@ -1293,12 +1568,31 @@ function render(t){
     }
   }
 
+  // pigment patches — matte, on the floor, under everything alive
+  for(const p of patches){
+    const a=(p.t/p.T)*.28;
+    ctx.beginPath(); blobPath(ctx,p.x,p.y,p.r,9,p.seed,.4);
+    ctx.fillStyle=css(p.owner==='player'?stainTint('green'):mix(stainTint('green'),[80,100,60],.4), a);
+    ctx.fill();
+    if(p.owner==='enemy'){
+      // the damask motif on the trail
+      ctx.strokeStyle=css(dark(stainTint('green'),.7), a*1.4); ctx.lineWidth=1;
+      ctx.beginPath();
+      for(let s=0;s<Math.PI*2.5;s+=.4){
+        const rr=p.r*.5*s/(Math.PI*2.5);
+        const px=p.x+Math.cos(s+p.seed)*rr, py=p.y+Math.sin(s+p.seed)*rr;
+        s===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+      }
+      ctx.stroke();
+    }
+  }
+
   // hub entrances
   if(mode==='hub') for(const hd of hubDoors) drawEntrance(hd,t);
   // room fixtures
   if(kiln) drawKiln(t);
   if(interactable && interactable.kind!=='kiln') drawInteractable(interactable,t);
-  if(door) drawDoor(t);
+  for(const d of doors) drawDoor(d,t);
   for(const sd of swatchDrops) drawSwatchDrop(sd,t);
 
   // dust motes — the confusers
@@ -1400,6 +1694,11 @@ function render(t){
       ctx.fillStyle=css(b.col,.75); ctx.fill();
       ctx.beginPath(); ctx.ellipse(-18,0,10,1.1,0,0,7);
       ctx.fillStyle=css(b.col,.25); ctx.fill();
+    } else if(b.kind==='spore'){
+      ctx.beginPath(); ctx.arc(jit(b.seed,1,1.2),jit(b.seed,2,1.2),3.4,0,7);
+      ctx.fillStyle=css(b.col,.8); ctx.fill();
+      ctx.beginPath(); ctx.arc(-6,0,2,0,7);
+      ctx.fillStyle=css(b.col,.3); ctx.fill();
     } else {
       ctx.beginPath(); ctx.ellipse(0,0,7,2.6,0,0,7);
       ctx.fillStyle=css(b.col,.85); ctx.fill();
@@ -1413,6 +1712,12 @@ function render(t){
   for(const pu of pulses){
     ctx.beginPath(); ctx.arc(pu.x,pu.y, 20+(pu.r-20)*(pu.t/.35),0,7);
     ctx.strokeStyle=css(tint('purple'), .5*pu.t/.35); ctx.lineWidth=2; ctx.stroke();
+  }
+  // detonations — expanding rings
+  for(const bo of booms){
+    const k=1-bo.t/.25;
+    ctx.beginPath(); ctx.arc(bo.x,bo.y, bo.r*k,0,7);
+    ctx.strokeStyle=css(tint('orange'), .6*(1-k)); ctx.lineWidth=3*(1-k)+1; ctx.stroke();
   }
 
   // pigment drops
@@ -1492,6 +1797,33 @@ function drawEnemy(e){
                            e.x-e.r*.45+i*e.r*.5, e.y+e.r*.8);
       ctx.stroke();
     }
+  }
+  if(e.type==='damask'){
+    // Scheele's Green: creeping damask wallpaper (§11.2)
+    watercolor(ctx,(cc,s)=>{ blobPath(cc,e.x,e.y,e.r,11,e.seed+s,.4); },
+      tcol,edge,e.seed,{a1:.35,a2:.25,edgeW:2,lineW:1.1});
+    ctx.strokeStyle=css(dark(tcol,.55),.6); ctx.lineWidth=1.1;
+    for(let c2=0;c2<3;c2++){
+      const ox=Math.cos(c2*2.1+e.rot)*e.r*.45, oy=Math.sin(c2*2.1+e.rot)*e.r*.45;
+      ctx.beginPath();
+      for(let s=0;s<Math.PI*2.2;s+=.35){
+        const rr=e.r*.3*s/(Math.PI*2.2);
+        const px=e.x+ox+Math.cos(s+e.seed+c2)*rr, py=e.y+oy+Math.sin(s+e.seed+c2)*rr;
+        s===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+      }
+      ctx.stroke();
+    }
+  }
+  if(e.type==='burst'){
+    // Realgar: bursting fragments — and it flashes when the fuse is lit
+    const fl = e.fuse>=0 && Math.sin(boilFrame*3)>0;
+    watercolor(ctx,(cc,s)=>{ shardPath(cc,e.x,e.y,e.r*(fl?1.25:1),e.rot,e.seed+s,.85); },
+      fl?mix(tcol,[255,255,255],.55):tcol,edge,e.seed,{a1:.45,a2:.3,edgeW:2,lineW:1.2});
+    ctx.strokeStyle=css(dark(tcol,.55),.6); ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(e.x-3,e.y+jit(e.seed,51,1)); ctx.lineTo(e.x+3,e.y+jit(e.seed,52,1));
+    ctx.moveTo(e.x+jit(e.seed,53,1),e.y-3); ctx.lineTo(e.x+jit(e.seed,54,1),e.y+3);
+    ctx.stroke();
   }
   if(e.type==='spiral'){
     // Tyrian's shape signature: the spiral shell (§11.2)
@@ -1584,53 +1916,75 @@ function drawEntrance(hd,t){
   ctx.fillText(ACT_LABEL[hd.act], hd.x, hd.y+48);
 }
 
-function drawDoor(t){
-  const pulse=.5+.5*Math.sin(t*3);
-  ctx.strokeStyle=css(INK,.6); ctx.lineWidth=2;
+function drawDoor(d,t){
+  const pulse=.5+.5*Math.sin(t*3+d.seed);
+  const lockedOut = d.locked && !relic('conservators_key');
+  ctx.strokeStyle=css(INK, lockedOut?.35:.6); ctx.lineWidth=2;
   ctx.beginPath();
-  ctx.moveTo(door.x-14, door.y-34); ctx.lineTo(door.x+10+jit(door.seed,1,1), door.y-30);
-  ctx.moveTo(door.x-14, door.y+34); ctx.lineTo(door.x+10+jit(door.seed,2,1), door.y+30);
+  ctx.moveTo(d.x-14, d.y-34); ctx.lineTo(d.x+10+jit(d.seed,1,1), d.y-30);
+  ctx.moveTo(d.x-14, d.y+34); ctx.lineTo(d.x+10+jit(d.seed,2,1), d.y+30);
   ctx.stroke();
-  ctx.beginPath(); ctx.arc(door.x,door.y,10+pulse*4,0,7);
-  ctx.strokeStyle=css(INK,.35+.25*pulse); ctx.lineWidth=1.4; ctx.stroke();
+  if(lockedOut){
+    // the seal: a padlock scrawl
+    ctx.strokeStyle=css(INK,.55); ctx.lineWidth=1.6;
+    ctx.strokeRect(d.x-6,d.y-3,12,10);
+    ctx.beginPath(); ctx.arc(d.x,d.y-4,5,Math.PI,0); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.arc(d.x,d.y,10+pulse*4,0,7);
+    ctx.strokeStyle=css(INK,.35+.25*pulse); ctx.lineWidth=1.4; ctx.stroke();
+  }
   ctx.font='9px "Courier New",monospace';
-  ctx.textAlign='center';
+  ctx.textAlign='right';
   ctx.fillStyle='rgba(58,53,44,.55)';
-  ctx.fillText('NEXT BAY', door.x-8, door.y+52);
+  ctx.fillText(d.label, d.x+16, d.y+52);
 }
 
 function drawSwatchDrop(sd,t){
   const bob=Math.sin(t*2+sd.seed)*3;
   ctx.save(); ctx.translate(sd.x,sd.y+bob); ctx.rotate(Math.sin(sd.seed)*.15);
-  // a paper chip
-  ctx.fillStyle=css(PAPER,.9);
-  ctx.strokeStyle=css(INK,.5); ctx.lineWidth=1;
-  ctx.fillRect(-16,-20,32,40); ctx.strokeRect(-16,-20,32,40);
-  ctx.fillStyle=css(tint(sd.def.color),.85);
-  ctx.fillRect(-10,-14,20,16);
-  if(sd.fugitive){
-    ctx.font='7px "Courier New",monospace'; ctx.textAlign='center';
-    ctx.fillStyle=css(INK,.55); ctx.fillText('fugitive',0,10);
+  if(sd.kind==='relic'){
+    // lab equipment reads as a manila tag
+    ctx.fillStyle='rgba(216,204,176,.95)';
+    ctx.strokeStyle=css(INK,.55); ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(-14,-20); ctx.lineTo(14,-20); ctx.lineTo(14,20); ctx.lineTo(0,26); ctx.lineTo(-14,20);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,-14,3,0,7); ctx.stroke();
+    ctx.fillStyle=css(sd.vialColor?tint(sd.vialColor):INK,.8);
+    ctx.fillRect(-7,-6,14,14);
+  } else {
+    // a paper chip
+    ctx.fillStyle=css(PAPER,.9);
+    ctx.strokeStyle=css(INK,.5); ctx.lineWidth=1;
+    ctx.fillRect(-16,-20,32,40); ctx.strokeRect(-16,-20,32,40);
+    ctx.fillStyle=css(tint(sd.def.color),.85);
+    ctx.fillRect(-10,-14,20,16);
+    if(sd.fugitive){
+      ctx.font='7px "Courier New",monospace'; ctx.textAlign='center';
+      ctx.fillStyle=css(INK,.55); ctx.fillText('fugitive',0,10);
+    }
   }
   ctx.restore();
   ctx.font='9px "Courier New",monospace'; ctx.textAlign='center';
   ctx.fillStyle='rgba(58,53,44,.65)';
-  ctx.fillText(sd.def.name, sd.x, sd.y+34);
+  ctx.fillText(sd.kind==='relic'?sd.def.name.toUpperCase():sd.def.name, sd.x, sd.y+40);
   ctx.fillStyle='rgba(58,53,44,.45)';
-  ctx.fillText(sd.def.desc, sd.x, sd.y+46);
+  ctx.fillText(sd.def.desc, sd.x, sd.y+52);
 }
 
 function drawKiln(t){
   const k=kiln;
+  const sec=k.sec||'purple';
+  const live=COLORS[sec].live;
   const st = raid?raid.state:'';
-  const heat = st==='firing' ? kilnTemp : (st==='birth'||st==='done'||lib.purple.on) ? 1 : 0;
+  const heat = st==='firing' ? kilnTemp : (st==='birth'||st==='done'||lib[sec].on) ? 1 : 0;
   if(st==='objective'){
     const pulse=.5+.5*Math.sin(t*2.4);
     ctx.beginPath(); ctx.arc(k.x,k.y,k.r+12+pulse*6,0,7);
-    ctx.strokeStyle=css(mix(INK,COLORS.purple.live,.4),.25+.2*pulse); ctx.lineWidth=1.2; ctx.stroke();
+    ctx.strokeStyle=css(mix(INK,live,.4),.25+.2*pulse); ctx.lineWidth=1.2; ctx.stroke();
   }
   watercolor(ctx,(cc,s)=>{ blobPath(cc,k.x,k.y,k.r*1.05,6,s+k.seed,.18); },
-    mix([132,122,112],[96,58,104],heat*.55),[52,44,40],k.seed,
+    mix([132,122,112],dark(live,.8),heat*.55),[52,44,40],k.seed,
     {a1:.55,a2:.35,edgeW:3,lineW:1.6});
   ctx.strokeStyle='rgba(58,50,44,.35)'; ctx.lineWidth=1;
   for(let i=-1;i<=1;i++){
@@ -1640,18 +1994,18 @@ function drawKiln(t){
     ctx.stroke();
   }
   ctx.beginPath(); blobPath(ctx,k.x,k.y+4,k.r*.42,7,k.seed+5,.3);
-  ctx.fillStyle=css(mix([30,26,24],[150,70,160],heat),.9); ctx.fill();
+  ctx.fillStyle=css(mix([30,26,24],mix(live,[255,255,255],.2),heat),.9); ctx.fill();
   if(heat>.02){
     ctx.save(); ctx.globalCompositeOperation='lighter';
     ctx.beginPath(); ctx.arc(k.x,k.y+4,k.r*.55,0,7);
-    ctx.fillStyle=css([190,100,210],.14*heat*(0.8+.2*Math.sin(t*6))); ctx.fill();
+    ctx.fillStyle=css(COLORS[sec].glow,.14*heat*(0.8+.2*Math.sin(t*6))); ctx.fill();
     ctx.restore();
   }
   if(st==='firing'){
     ctx.beginPath(); ctx.arc(k.x,k.y,k.r+18,0,Math.PI*2);
     ctx.strokeStyle='rgba(58,53,44,.2)'; ctx.lineWidth=3; ctx.stroke();
     ctx.beginPath(); ctx.arc(k.x,k.y,k.r+18,-Math.PI/2,-Math.PI/2+kilnTemp*Math.PI*2);
-    ctx.strokeStyle=css(COLORS.purple.live,.8); ctx.lineWidth=3; ctx.stroke();
+    ctx.strokeStyle=css(live,.8); ctx.lineWidth=3; ctx.stroke();
   }
   ctx.font='9px "Courier New",monospace';
   ctx.textAlign='center';
@@ -1718,7 +2072,8 @@ function applySaveToWorld(s){
     if(s[c]){ lib[c].on=true; lib[c].t=1; }
   }
   if(s.red){ slots.delivery='red'; slots.payload='red'; }
-  if(typeof s.resonance==='number') resonance=s.resonance;
+  if(s.res) for(const sec in res) res[sec]=s.res[sec]||0;
+  else if(typeof s.resonance==='number') res.purple=s.resonance;   // pre-kilns save
 }
 function startGame(){
   audioOn();

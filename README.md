@@ -25,19 +25,29 @@ back to the hub, colors kept, swatches and excess pigment forfeit.
 - **The buried vault.** Liberate **Orpiment** — the **Quill** hitscan beam that pierces the
   room and overheats fast, and the **Chain** payload that arcs to nearby targets. Its guild
   snipes from range behind a telegraph line. Grid = 9.
-- **Resonance (§9).** Kills with mixed red/blue weapons reveal the **Purple Kiln** in
-  unaccessioned territory. The mix is the key, not the reward.
-- **The Firing (§7.6).** Only kills made with the mix feed the kiln; both parent guilds
-  attack, each resisting half of it; swapping to the pure counter-color is always locally
-  optimal — and feeds nothing. Reach temperature and the first purple things ever to exist
-  are born from the kiln mouth, immediately hostile. Purple brings the **Compass** phase
-  bolt and the **Singularity** payload. Grid = 16.
-- **The Processing Floors (endless).** Escalating bays, all factions, archives every fourth
-  room. Own-color resistance and the cross-harvest loop throughout.
+- **Resonance (§9).** Each secondary has its own meter: mixed red/blue kills reveal the
+  **Tyrian kiln**, blue/yellow the **Scheele's Green kiln**, red/yellow the **Realgar kiln**.
+  The mix is the key, not the reward.
+- **The Firings (§7.6).** Only kills made with the mandated mix feed a kiln; its two parent
+  guilds attack, each resisting half of it; swapping to the pure counter-color is always
+  locally optimal — and feeds nothing. Reach temperature and the first things of that color
+  ever to exist are born from the kiln mouth, immediately hostile: Tyrian spiral shells that
+  phase in and out, Scheele's creeping damask that trails poison wallpaper, Realgar bursts
+  that run at you and explode. Six colors → **the full 36-weapon grid**: Sponge (seeking
+  spores) × Leech (heal + hazard pools), Bellows (cluster burst) × Detonate (blast +
+  knockback), Compass (phase bolt) × Singularity (crowd vacuum), and every cross-mix.
+- **The Processing Floors (endless).** Escalating bays with a **branching route map** (§7.5):
+  cleared bays open onto labelled routes — VERMILION BAY, ARCHIVE, an occasional SEALED BAY —
+  so routing *is* the cross-harvest decision: pick the bay that grows the pigment you lack.
 
-**Swatches (§7.3):** archive rooms offer three loose pigment samples; each buffs one slot of
-one color ("brush dabs pierce", "chill stacks faster", "quill overheats slower"…). *Fugitive*
-swatches are stronger but fade after 100 seconds; *permanent* ones last the run.
+**Swatches (§7.3):** archive rooms offer loose pigment samples; each buffs one slot of one
+color ("brush dabs pierce", "chill stacks faster", "quill overheats slower"…). *Fugitive*
+swatches are stronger but fade; *permanent* ones last the run.
+
+**Relics (§7.9):** every archive may also hold one piece of stationery or lab equipment —
+pigment vial (+damage for one color), catalogue leaf (routes always labelled), humidity
+gauge (fugitive swatches fade slower), crate seal (a fourth swatch on offer), conservator's
+key (opens sealed bays), swatch book (resonance builds twice as fast).
 
 Systems in: per-color charge meters read off Payne's fissures, pigment-drop economy,
 permanent drying stains — the hub's layer persists forever, each bay is its own painting
