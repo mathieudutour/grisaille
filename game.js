@@ -49,18 +49,24 @@ const COLORS = {
          warden:'VERMILION', tool:'BRUSH', payload:'BURN', glow:[255,90,50] },
   blue:{ live:[44,86,148],  stain:[96,112,140],  grey:[124,127,132],
          warden:'ULTRAMARINE', tool:'ROLLER', payload:'CHILL', glow:[90,140,255] },
+  /* purple is never liberated — it is FIRED at the kiln (§2.4, §7.6) */
+  purple:{ live:[118,62,132], stain:[122,96,130], grey:[126,123,128],
+         warden:'TYRIAN', tool:'COMPASS', payload:'SINGULARITY', glow:[210,130,255] },
 };
 
 /* ---------- liberation state (persistent, §6) ---------- */
-const lib = { red:{on:false,t:0}, blue:{on:false,t:0} };
+const lib = { red:{on:false,t:0}, blue:{on:false,t:0}, purple:{on:false,t:0} };
 function tint(c){ if(c==='grey') return COLORS.grey.live;
   return mix(COLORS[c].grey, COLORS[c].live, lib[c].t); }
 function stainTint(c){ if(c==='grey') return COLORS.grey.stain;
   return mix([150,145,135], COLORS[c].stain, lib[c].t); }
-function ownedColors(){ const o=[]; if(lib.red.on)o.push('red'); if(lib.blue.on)o.push('blue'); return o; }
+function ownedColors(){ const o=[];
+  if(lib.red.on)o.push('red'); if(lib.blue.on)o.push('blue'); if(lib.purple.on)o.push('purple');
+  return o; }
 
 const SAVE_KEY='grisaille-save-v1';
-function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify({red:lib.red.on, blue:lib.blue.on})); }catch(e){} }
+function save(){ try{ localStorage.setItem(SAVE_KEY,
+  JSON.stringify({red:lib.red.on, blue:lib.blue.on, purple:lib.purple.on})); }catch(e){} }
 function loadSave(){ try{ return JSON.parse(localStorage.getItem(SAVE_KEY)||'null'); }catch(e){ return null; } }
 
 /* ---------- paper (cached) ---------- */
@@ -212,7 +218,7 @@ function makeCrates(){
 /* Payne, sediment */
 const player={ x:0,y:0, r:15, aim:0, hits:0, maxHits:6, fireT:0, seed:555,
   inv:0, dashT:0, dashCd:0, dashA:0,
-  charge:{red:1, blue:1} };
+  charge:{red:1, blue:1, purple:1} };
 
 /* fissure network across Payne's back — each seam is one color's meter (§3.4) */
 const fissures=[];
@@ -230,12 +236,17 @@ const fissures=[];
 /* the two-slot weapon (§8.2) */
 const slots={ delivery:'grey', payload:'grey' };
 
-let enemies=[], ebullets=[], pbullets=[], motes=[], drops=[], shake=0;
-let interactable=null;      // the cold forge / the flooded hatch
+let enemies=[], ebullets=[], pbullets=[], motes=[], drops=[], pulses=[], shake=0;
+let interactable=null;      // the cold forge / the flooded hatch / the kiln door
+let kiln=null;              // the Purple Kiln, once resonance reveals it (§9)
+let kilnTemp=0;
+let resonance=0;
+const RES_MAX=12;
 let phase='title';          // title → prologue → forge → act1 → vault → free
+                            //   → kilnRevealed → firing → birth → restored
 let killsPhase=0, killsTotal=0;
 let timescale=1, cineT=0;
-let reshelving=0;
+let reshelving=0, reportT=0;
 
 function makeMotes(){
   motes=[];
@@ -270,6 +281,8 @@ function spawnEnemy(type,edge,px,py){
                           orbit:rand(170,300), dir:Math.random()<.5?1:-1 });
   if(type==='strata')  Object.assign(base,{ faction:'blue', r:18, hp:12, speed:34,
                           fireT:rand(2,4), ph:rand(0,7) });
+  if(type==='spiral')  Object.assign(base,{ faction:'purple', r:16, hp:10, speed:30,
+                          fireT:rand(2,4), ph:rand(0,3.8), phased:false });
   enemies.push(base);
   return base;
 }
@@ -283,8 +296,16 @@ function desiredRoster(){
     case 'forge':    return { plaster:3, husk:1, shard: small?4:5 };
     case 'act1':     return { plaster:3, husk:1, shard: small?4:6 };
     case 'vault':    return { plaster:2, husk:1, shard:3, strata: small?3:4 };
-    case 'free':     return { plaster:2+Math.round(d*2), husk:1+Math.round(d),
+    case 'free':
+    case 'kilnRevealed':
+                     return { plaster:2+Math.round(d*2), husk:1+Math.round(d),
                               shard:3+Math.round(d*2), strata:2+Math.round(d*2) };
+    // the Firing (§7.6): both parent factions, in numbers, and nothing else
+    case 'firing':   return { shard: small?4:5, strata: small?4:5 };
+    case 'birth':    return { shard:2, strata:2 };
+    case 'restored': return { plaster:2+Math.round(d*2), husk:1+Math.round(d),
+                              shard:3+Math.round(d*2), strata:2+Math.round(d*2),
+                              spiral:2+Math.round(d*2) };
   }
   return {};
 }
@@ -357,9 +378,10 @@ function dash(){
    THE WEAPON — two slots, any color (§8)
    ============================================================ */
 const DELIVERY={
-  grey:{ rate:7,  cost:0 },
-  red: { rate:10, cost:.012 },   // Brush — rapid stream, short range
-  blue:{ rate:2.3,cost:.035 },   // Roller — arcing lob, splash
+  grey:  { rate:7,  cost:0 },
+  red:   { rate:10, cost:.012 }, // Brush — rapid stream, short range
+  blue:  { rate:2.3,cost:.035 }, // Roller — arcing lob, splash
+  purple:{ rate:3.5,cost:.028 }, // Compass — phase bolt, pierces everything in a line
 };
 function cycleSlot(which){
   const own=ownedColors();
@@ -400,6 +422,13 @@ function fireWeapon(){
       t:0, T:.62, dmg:mono?5:3, splash:60, col, mono,
       dCost:mono?spec.cost*2:spec.cost, pCost:.02, seed:(Math.random()*999)|0 });
     blip(150,.1,'sine',.03);
+  } else if(d==='purple'){
+    const a=player.aim+rand(-.03,.03);
+    pbullets.push({ kind:'bolt', x:player.x+Math.cos(a)*16, y:player.y+Math.sin(a)*16,
+      vx:Math.cos(a)*620, vy:Math.sin(a)*620,
+      life:.5, dmg:mono?2.2:1.3, col, mono, hitList:[],
+      dCost:mono?spec.cost*2:spec.cost, pCost:.01, seed:(Math.random()*999)|0 });
+    blip(500,.07,'sine',.025);
   } else {
     const spread = d==='red'?.09:.05;
     const a=player.aim+rand(-spread,spread);
@@ -414,7 +443,7 @@ function fireWeapon(){
 }
 
 /* payload on-hit effects (§8.4) */
-function applyPayload(e,strong){
+function applyPayload(e,strong,hx,hy,emitPulse=true){
   const p=slots.payload;
   if(p==='grey'||!chargeOk(p)) return;
   if(p==='red'){ e.burn=Math.max(e.burn,2.5); }
@@ -422,6 +451,11 @@ function applyPayload(e,strong){
     e.chill=Math.min(5, e.chill+(strong?2:1));
     if(e.chill>=5 && e.frozen<=0){ e.frozen=1.3; blip(700,.15,'sine',.04); }
   }
+  if(p==='purple' && emitPulse) singularity(hx,hy);
+}
+function singularity(x,y){
+  pulses.push({x,y,t:.35});
+  blip(240,.14,'sine',.03);
 }
 /* own-color resistance (§11.1) — the cross-harvest driver */
 function dmgMult(e){
@@ -435,7 +469,8 @@ function dmgMult(e){
 function hitEnemy(e,b){
   const dmg=b.dmg*dmgMult(e);
   e.hp-=dmg; e.hurt=1;
-  applyPayload(e, b.kind==='lob');
+  // a lob emits one pulse at its landing point instead of one per enemy caught
+  applyPayload(e, b.kind==='lob', b.x, b.y, b.kind!=='lob');
   splat(b.x,b.y,stainTint(slots.payload!=='grey'?slots.payload:slots.delivery),4.5,.09);
   blip(dmgMult(e)<1?260:420,.04,'triangle',.02);
   if(e.hp<=0) killEnemy(e);
@@ -458,7 +493,27 @@ function killEnemy(e){
     const c=ownedColors()[Math.random()*ownedColors().length|0];
     drops.push({x:e.x, y:e.y, color:c, life:9, seed:e.seed});
   }
+  // resonance (§9): purple-tinted kills reveal the kiln
+  if(phase==='free' && isMixedRB()){
+    resonance++;
+    if(resonance>=RES_MAX){ phase='kilnRevealed'; placeInteractable('kiln'); blip(495,.3,'sine',.05); }
+  }
+  // the Firing (§7.6): only kills made with the target mix feed the kiln
+  if(phase==='firing' && isMixedRB()){
+    kilnTemp=Math.min(1,kilnTemp+.075);
+    blip(620,.08,'sine',.03);
+  }
+  // the birth phase ends when the player survives their own creation
+  if(e.birth && !enemies.some(o=>o!==e && !o.dead && o.birth)){
+    liberate('purple');
+    phase='restored'; killsPhase=0;
+    if(kiln){ splat(kiln.x,kiln.y,stainTint('purple'),44,.2); }
+  }
   checkPhase();
+}
+function isMixedRB(){
+  return (slots.delivery==='red'&&slots.payload==='blue') ||
+         (slots.delivery==='blue'&&slots.payload==='red');
 }
 
 /* ============================================================
@@ -470,7 +525,9 @@ const formEl=document.getElementById('form'), formText=document.getElementById('
 const weaponEl=document.getElementById('weapon');
 const comboEl=document.getElementById('comboName');
 const slotDEl=document.getElementById('slotD'), slotPEl=document.getElementById('slotP');
-const meterRows={ red:document.querySelector('#meterRed'), blue:document.querySelector('#meterBlue') };
+const meterRows={ red:document.querySelector('#meterRed'), blue:document.querySelector('#meterBlue'),
+  purple:document.querySelector('#meterPurple') };
+const resRow=document.querySelector('#meterRes'), kilnRow=document.querySelector('#meterKiln');
 
 function objectiveText(){
   switch(phase){
@@ -478,9 +535,18 @@ function objectiveText(){
     case 'forge':    return 'the forge is exposed. touch it.';
     case 'act1':     return `locate the flooded hatch — ${Math.min(killsPhase,QUOTA.act1)}/${QUOTA.act1} processed`;
     case 'vault':    return 'the hatch is open. enter.';
-    case 'free':     return `restoration ongoing — ${killsTotal} accessions struck`;
+    case 'free':     return `fire mixed pigment — resonance ${resonance}/${RES_MAX}`;
+    case 'kilnRevealed': return 'the kiln stands in unaccessioned territory. light it.';
+    case 'firing':   return `HOLD THE MIX — kiln at ${Math.round(kilnTemp*100)}%`;
+    case 'birth':    return 'the first purple things. survive your creation.';
+    case 'restored': return `restoration ongoing — ${killsTotal} accessions struck`;
   }
   return 'awaiting accession';
+}
+function tyrianLine(){
+  if(lib.purple.on) return 'FIRED — no record exists';
+  if(phase==='firing'||phase==='birth') return 'firing in progress';
+  return 'unfired — never existed';
 }
 function updateReport(){
   const cond = player.hits===0 ? 'cracked throughout. Stable.' :
@@ -491,6 +557,7 @@ OBJECT ......... figure, compacted pigment
 CONDITION ...... ${cond}
 VERMILION ...... ${lib.red.on?'RELEASED — in circulation':'in storage (grey)'}
 ULTRAMARINE .... ${lib.blue.on?'RELEASED — in circulation':'submerged (grey)'}
+TYRIAN ......... ${tyrianLine()}
 OBJECTIVE ...... ${objectiveText()}
 RECOMMENDATION . ${player.hits>=player.maxHits-1?'contain':'monitor'}`;
 }
@@ -505,7 +572,7 @@ function updateWeaponHud(){
   slotPEl.style.color = css(tint(slots.payload));
 }
 function updateMeters(){
-  for(const c of ['red','blue']){
+  for(const c of ['red','blue','purple']){
     const row=meterRows[c];
     row.classList.toggle('on', lib[c].on);
     if(lib[c].on){
@@ -514,10 +581,23 @@ function updateMeters(){
       bar.style.background=css(tint(c),.8);
     }
   }
+  resRow.classList.toggle('on', phase==='free');
+  if(phase==='free'){
+    const bar=resRow.querySelector('i');
+    bar.style.width=(resonance/RES_MAX*100)+'%';
+    bar.style.background=css(COLORS.purple.live,.6);
+  }
+  kilnRow.classList.toggle('on', phase==='firing');
+  if(phase==='firing'){
+    const bar=kilnRow.querySelector('i');
+    bar.style.width=(kilnTemp*100)+'%';
+    bar.style.background=css(COLORS.purple.live,.85);
+  }
 }
 function showStamp(color,lines,dur){
   stampEl.textContent=lines;
-  stampEl.classList.toggle('blue', color==='blue');
+  stampEl.classList.remove('blue','purple');
+  if(color==='blue'||color==='purple') stampEl.classList.add(color);
   stampEl.classList.add('show');
   setTimeout(()=>stampEl.classList.remove('show'), dur||2600);
 }
@@ -532,7 +612,12 @@ function reshelve(){
   player.hits=0; player.x=W/2; player.y=H/2;
   // Working Stock: re-shelving refills every owned color to the floor.
   for(const c of ownedColors()) player.charge[c]=Math.max(player.charge[c],.55);
-  ebullets=[]; drops=[];
+  ebullets=[]; drops=[]; pulses=[];
+  // failure at the kiln (§7.6): retrieval is also procedure — the kiln cools
+  if(phase==='firing'||phase==='birth'){
+    phase='kilnRevealed'; kilnTemp=0; interactable=kiln;
+    for(const e of enemies) if(e.birth) e.dead=true;
+  }
   blip(140,.5,'sine',.06);
   updateReport();
   setTimeout(()=>formEl.style.display='none',2200);
@@ -545,9 +630,16 @@ const QUOTA={ prologue:10, act1:15 };
 
 function placeInteractable(kind){
   let x,y,tries=0;
-  do{ x=rand(W*.2,W*.8); y=rand(H*.2,H*.8); tries++; }
-  while(Math.hypot(x-player.x,y-player.y)<260 && tries<40);
-  interactable={ kind, x, y, r:26, seed:(Math.random()*999)|0, pulse:0 };
+  if(kind==='kiln'){
+    // the unaccessioned territory: the kiln sits near an edge, outside the tidy aisles
+    const corner=[[.12,.15],[.88,.15],[.12,.85],[.88,.85]][Math.random()*4|0];
+    x=W*corner[0]+rand(-30,30); y=H*corner[1]+rand(-30,30);
+  } else {
+    do{ x=rand(W*.2,W*.8); y=rand(H*.2,H*.8); tries++; }
+    while(Math.hypot(x-player.x,y-player.y)<260 && tries<40);
+  }
+  interactable={ kind, x, y, r:kind==='kiln'?30:26, seed:(Math.random()*999)|0, pulse:0 };
+  if(kind==='kiln'){ kiln=interactable; return; }
   // its keepers, still in storage, rendered grey — the crowd you cannot yet read (§4)
   const guard = kind==='forge' ? 'shard' : 'strata';
   const n = W<700?4:5;
@@ -568,9 +660,14 @@ function liberate(color){
   save();
   if(color==='red'){ slots.delivery='red'; slots.payload='red'; }
   timescale=.22; cineT=1.7;
-  showStamp(color, `${COLORS[color].warden} — RELEASED\ncondition: fugitive. in circulation.`, 3000);
+  // secondaries are not released from storage — they are made (§2.4)
+  const stampText = color==='purple'
+    ? 'TYRIAN — FIRED\ncondition: new. no record exists.'
+    : `${COLORS[color].warden} — RELEASED\ncondition: fugitive. in circulation.`;
+  showStamp(color, stampText, 3000);
   blip(520,.5,'sine',.06); blip(660,.8,'sine',.05);
   if(color==='blue') setTimeout(()=>blip(392,.8,'sine',.04),150);
+  if(color==='purple') setTimeout(()=>blip(311,.9,'sine',.045),150);
   updateReport(); updateWeaponHud();
 }
 
@@ -579,12 +676,36 @@ function touchInteractable(){
   const d=Math.hypot(player.x-interactable.x, player.y-interactable.y);
   if(d>interactable.r+player.r) return;
   const kind=interactable.kind;
+  if(kind==='kiln'){
+    // light it — the kiln stays in the world; the Firing begins
+    interactable=null;
+    phase='firing'; kilnTemp=.2;
+    showStamp('purple','THE FIRING\nonly the mix feeds the kiln', 2600);
+    blip(392,.4,'sine',.05); blip(311,.6,'sine',.04);
+    updateReport();
+    return;
+  }
   splat(interactable.x,interactable.y, kind==='forge'?stainTint('red'):stainTint('blue'), 30,.2);
   interactable=null;
   killsPhase=0;
   if(kind==='forge'){ liberate('red'); phase='act1'; }
   else { liberate('blue'); phase='free'; }
   updateReport();
+}
+
+/* the final minute of the Firing: the new color is born from the kiln, hostile (§7.6.5) */
+function birthPhase(){
+  phase='birth';
+  timescale=.25; cineT=1.4;
+  splat(kiln.x,kiln.y,stainTint('purple'),40,.2);
+  const n=5;
+  for(let i=0;i<n;i++){
+    const a=(i/n)*Math.PI*2;
+    const e=spawnEnemy('spiral',false, kiln.x+Math.cos(a)*80, kiln.y+Math.sin(a)*80);
+    e.birth=true;
+  }
+  showStamp('purple','THE KILN FIRES\nthe first purple thing turns on you', 2800);
+  blip(392,.5,'sine',.05); blip(466,.7,'sine',.05); blip(554,.9,'sine',.04);
 }
 
 /* ============================================================
@@ -633,6 +754,20 @@ function update(rdt,t){
 
   touchInteractable();
   if(interactable) interactable.pulse+=dt;
+
+  // -- the Firing (§7.6): the kiln cools unless fed with the mix
+  if(phase==='firing'){
+    if(kilnTemp>=1) birthPhase();
+    else {
+      kilnTemp=Math.max(0,kilnTemp-.012*dt);
+      if(kilnTemp<=0){
+        phase='kilnRevealed'; interactable=kiln;
+        showStamp('purple','THE KILN COOLS\nlight it again', 2000);
+        blip(120,.4,'sine',.05);
+      }
+    }
+  }
+  reportT-=rdt; if(reportT<=0){ reportT=.3; updateReport(); }
 
   // -- enemies
   maintainWaves();
@@ -703,12 +838,34 @@ function update(rdt,t){
         blip(95,.12,'sine',.02);
       }
     }
+    if(e.type==='spiral'){
+      // Tyrian phases in and out (§3.2) — immaterial while phased out
+      e.ph+=dt;
+      e.phased = (e.ph%3.8)>2.4;
+      e.rot+=dt*1.4;
+      if(!e.phased){
+        if(d>240){ e.x+=dx/d*e.speed*slow*dt; e.y+=dy/d*e.speed*slow*dt; }
+        e.fireT-=dt*slow;
+        if(e.fireT<=0 && d<W*.7){
+          e.fireT=rand(2.6,3.6);
+          const base=Math.atan2(dy,dx);
+          for(let i=-1;i<=1;i++){
+            const a=base+i*.12;
+            ebullets.push({x:e.x,y:e.y,vx:Math.cos(a)*105,vy:Math.sin(a)*105,
+              life:6,kind:'pbolt',rot:rand(0,7),spin:rand(-2,2),seed:(Math.random()*999)|0});
+          }
+          blip(180,.08,'sine',.015);
+        }
+      } else {
+        e.x+=Math.cos(e.rot)*22*dt; e.y+=Math.sin(e.rot)*22*dt;
+      }
+    }
   }
 
   // -- enemy bullets
   for(const b of ebullets){
     b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt; b.rot+=b.spin*dt;
-    const rr = b.kind==='glob'?7 : b.kind==='dot'?4 : 4.6;
+    const rr = b.kind==='glob'?7 : b.kind==='dot'?4 : b.kind==='pbolt'?4.5 : 4.6;
     if(Math.hypot(b.x-player.x,b.y-player.y)<player.r-2+rr*.4){
       b.life=0; hurtPlayer();
     }
@@ -726,16 +883,25 @@ function update(rdt,t){
         splat(b.x,b.y,stainTint(slots.payload!=='grey'?slots.payload:'blue'),14,.12);
         shake=Math.max(shake,.12);
         blip(200,.12,'sine',.04);
+        // one pulse at the landing point, even on a clean miss
+        if(slots.payload==='purple' && chargeOk('purple')) singularity(b.x,b.y);
         for(const e of enemies)
-          if(!e.dead && Math.hypot(e.x-b.x,e.y-b.y)<b.splash+e.r) hitEnemy(e,b);
+          if(!e.dead && !e.phased && Math.hypot(e.x-b.x,e.y-b.y)<b.splash+e.r) hitEnemy(e,b);
       } else b.life=1;
       continue;
     }
     b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt;
     for(const e of enemies){
-      if(!e.dead && Math.hypot(b.x-e.x,b.y-e.y)<e.r){
-        b.life=0; hitEnemy(e,b);
-        break;
+      if(e.dead || e.phased) continue;
+      if(Math.hypot(b.x-e.x,b.y-e.y)<e.r){
+        if(b.kind==='bolt'){
+          // Compass: phases through — hits everything on the line, once each
+          if(b.hitList.includes(e)) continue;
+          b.hitList.push(e); hitEnemy(e,b);
+        } else {
+          b.life=0; hitEnemy(e,b);
+          break;
+        }
       }
     }
   }
@@ -754,6 +920,17 @@ function update(rdt,t){
     }
   }
   drops=drops.filter(d=>d.life>0);
+
+  // -- singularity pulses: pull the crowd toward the impact point
+  for(const pu of pulses){
+    pu.t-=dt;
+    for(const e of enemies){
+      if(e.dead||e.phased) continue;
+      const dx=pu.x-e.x, dy=pu.y-e.y, dd=Math.hypot(dx,dy);
+      if(dd>4&&dd<130){ const s=Math.min(380*dt*(pu.t/.35), dd); e.x+=dx/dd*s; e.y+=dy/dd*s; }
+    }
+  }
+  pulses=pulses.filter(p=>p.t>0);
 
   // -- motes drift
   for(const m of motes){
@@ -800,8 +977,9 @@ function render(t){
     }
   }
 
-  // the interactable — cold forge / flooded hatch
-  if(interactable) drawInteractable(interactable,t);
+  // the interactable — cold forge / flooded hatch / kiln
+  if(kiln) drawKiln(t);
+  if(interactable && interactable.kind!=='kiln') drawInteractable(interactable,t);
 
   // dust motes — the confusers
   for(const m of motes){
@@ -823,6 +1001,17 @@ function render(t){
       ctx.fillStyle=css(mix([120,122,124],COLORS.blue.live,lib.blue.t), .5+lib.blue.t*.4); ctx.fill();
       if(lib.blue.t>.05){ ctx.beginPath(); ctx.arc(0,0,9,0,7);
         ctx.fillStyle=css(COLORS.blue.live,.1*lib.blue.t); ctx.fill(); }
+    } else if(b.kind==='pbolt'){
+      ctx.beginPath();
+      for(let a=0;a<Math.PI*3;a+=.5){
+        const rr=4.5*a/(Math.PI*3);
+        const px=Math.cos(a+b.rot)*rr, py=Math.sin(a+b.rot)*rr;
+        a===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+      }
+      ctx.strokeStyle=css(mix([118,114,120],COLORS.purple.live,lib.purple.t), .8);
+      ctx.lineWidth=2; ctx.stroke();
+      if(lib.purple.t>.05){ ctx.beginPath(); ctx.arc(0,0,7,0,7);
+        ctx.fillStyle=css(COLORS.purple.live,.12*lib.purple.t); ctx.fill(); }
     } else {
       ctx.beginPath(); ctx.arc(0,0,4,0,7);
       ctx.fillStyle='rgba(96,90,80,.6)'; ctx.fill();
@@ -845,11 +1034,25 @@ function render(t){
     }
     const a=Math.atan2(b.vy,b.vx);
     ctx.save(); ctx.translate(b.x,b.y); ctx.rotate(a);
-    ctx.beginPath(); ctx.ellipse(0,0,7,2.6,0,0,7);
-    ctx.fillStyle=css(b.col,.85); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(-8,0,6,1.6,0,0,7);
-    ctx.fillStyle=css(b.col,.3); ctx.fill();
+    if(b.kind==='bolt'){
+      // Compass phase bolt — a long needle, half in this world
+      ctx.beginPath(); ctx.ellipse(0,0,16,1.8,0,0,7);
+      ctx.fillStyle=css(b.col,.75); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(-18,0,10,1.1,0,0,7);
+      ctx.fillStyle=css(b.col,.25); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.ellipse(0,0,7,2.6,0,0,7);
+      ctx.fillStyle=css(b.col,.85); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(-8,0,6,1.6,0,0,7);
+      ctx.fillStyle=css(b.col,.3); ctx.fill();
+    }
     ctx.restore();
+  }
+
+  // singularity pulses — contracting rings
+  for(const pu of pulses){
+    ctx.beginPath(); ctx.arc(pu.x,pu.y, 20+110*(pu.t/.35),0,7);
+    ctx.strokeStyle=css(tint('purple'), .5*pu.t/.35); ctx.lineWidth=2; ctx.stroke();
   }
 
   // pigment drops
@@ -879,9 +1082,9 @@ function drawEnemy(e){
   // chill shifts toward pale blue-white; frozen is explicit
   if(e.chill>0) base=mix(base,[210,220,232],Math.min(1,e.chill/5)*.6);
   const tcol = e.hurt>0 ? mix(base,[255,255,255],e.hurt*.5) : base;
-  const edge = e.faction==='red' ? dark(mix(INK,COLORS.red.live,lib.red.t*.5),.9)
-             : e.faction==='blue'? dark(mix(INK,COLORS.blue.live,lib.blue.t*.5),.9)
-             : dark(INK,.9);
+  const edge = e.faction==='grey' ? dark(INK,.9)
+             : dark(mix(INK,COLORS[e.faction].live,lib[e.faction].t*.5),.9);
+  if(e.phased) ctx.globalAlpha=.3;
 
   if(e.type==='shard'){
     watercolor(ctx,(cc,s)=>{ shardPath(cc,e.x,e.y,e.r,e.rot,e.seed+s,1); },
@@ -927,6 +1130,19 @@ function drawEnemy(e){
       ctx.stroke();
     }
   }
+  if(e.type==='spiral'){
+    // Tyrian's shape signature: the spiral shell (§11.2)
+    watercolor(ctx,(cc,s)=>{ blobPath(cc,e.x,e.y,e.r,9,e.seed+s,.28); },
+      tcol,edge,e.seed,{a1:.4,a2:.3,edgeW:2.2,lineW:1.2});
+    ctx.strokeStyle=css(dark(tcol,.55),.65); ctx.lineWidth=1.3;
+    ctx.beginPath();
+    for(let a=0;a<Math.PI*4;a+=.25){
+      const rr=e.r*.85*a/(Math.PI*4);
+      const px=e.x+Math.cos(a+e.rot)*rr, py=e.y+Math.sin(a+e.rot)*rr;
+      a===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.stroke();
+  }
   // burn rim
   if(e.burn>0 && lib.red.t>.02){
     ctx.beginPath(); blobPath(ctx,e.x,e.y,e.r+3,9,e.seed+boilFrame,.3);
@@ -936,6 +1152,50 @@ function drawEnemy(e){
     ctx.beginPath(); blobPath(ctx,e.x,e.y,e.r+2,6,e.seed,.15);
     ctx.strokeStyle=css([210,225,240],.7); ctx.lineWidth=1.6; ctx.stroke();
   }
+  ctx.globalAlpha=1;
+}
+
+function drawKiln(t){
+  const k=kiln;
+  const heat = phase==='firing' ? kilnTemp : (phase==='birth'||lib.purple.on) ? 1 : 0;
+  // attention ring while waiting to be lit
+  if(phase==='kilnRevealed'){
+    const pulse=.5+.5*Math.sin(t*2.4);
+    ctx.beginPath(); ctx.arc(k.x,k.y,k.r+12+pulse*6,0,7);
+    ctx.strokeStyle=css(mix(INK,COLORS.purple.live,.4),.25+.2*pulse); ctx.lineWidth=1.2; ctx.stroke();
+  }
+  // the body: derelict brick, warming toward purple as it fires
+  watercolor(ctx,(cc,s)=>{ blobPath(cc,k.x,k.y,k.r*1.05,6,s+k.seed,.18); },
+    mix([132,122,112],[96,58,104],heat*.55),[52,44,40],k.seed,
+    {a1:.55,a2:.35,edgeW:3,lineW:1.6});
+  // brick courses
+  ctx.strokeStyle='rgba(58,50,44,.35)'; ctx.lineWidth=1;
+  for(let i=-1;i<=1;i++){
+    ctx.beginPath();
+    ctx.moveTo(k.x-k.r*.8, k.y+i*k.r*.4+jit(k.seed,i+90,1));
+    ctx.lineTo(k.x+k.r*.8, k.y+i*k.r*.4+jit(k.seed,i+93,1));
+    ctx.stroke();
+  }
+  // the mouth
+  ctx.beginPath(); blobPath(ctx,k.x,k.y+4,k.r*.42,7,k.seed+5,.3);
+  ctx.fillStyle=css(mix([30,26,24],[150,70,160],heat),.9); ctx.fill();
+  if(heat>.02){
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    ctx.beginPath(); ctx.arc(k.x,k.y+4,k.r*.55,0,7);
+    ctx.fillStyle=css([190,100,210],.14*heat*(0.8+.2*Math.sin(t*6))); ctx.fill();
+    ctx.restore();
+  }
+  // temperature gauge, drawn on the world
+  if(phase==='firing'){
+    ctx.beginPath(); ctx.arc(k.x,k.y,k.r+18,0,Math.PI*2);
+    ctx.strokeStyle='rgba(58,53,44,.2)'; ctx.lineWidth=3; ctx.stroke();
+    ctx.beginPath(); ctx.arc(k.x,k.y,k.r+18,-Math.PI/2,-Math.PI/2+kilnTemp*Math.PI*2);
+    ctx.strokeStyle=css(COLORS.purple.live,.8); ctx.lineWidth=3; ctx.stroke();
+  }
+  ctx.font='9px "Courier New",monospace';
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(58,53,44,.6)';
+  ctx.fillText('KILN — UNACCESSIONED', k.x, k.y+k.r+32);
 }
 
 function drawInteractable(it,t){
@@ -1031,18 +1291,20 @@ function applySaveToWorld(s){
   if(!s) return;
   if(s.red){ lib.red.on=true; lib.red.t=1; slots.delivery='red'; slots.payload='red'; }
   if(s.blue){ lib.blue.on=true; lib.blue.t=1; }
+  if(s.purple){ lib.purple.on=true; lib.purple.t=1; }
 }
 function startGame(){
   audioOn();
   titleEl.style.display='none';
   const s=loadSave();
-  if(s&&(s.red||s.blue)){
+  if(s&&(s.red||s.blue||s.purple)){
     applySaveToWorld(s);
-    phase = (s.red&&s.blue) ? 'free' : 'act1';
+    phase = (s.red&&s.blue&&s.purple) ? 'restored'
+          : (s.red&&s.blue) ? 'free' : 'act1';
   } else {
     phase='prologue';
   }
-  killsPhase=0;
+  killsPhase=0; resonance=0; kiln=null; kilnTemp=0; interactable=null;
   player.x=W/2; player.y=H/2; player.hits=0;
   for(const c of ownedColors()) player.charge[c]=1;
   enemies=[]; ebullets=[]; pbullets=[]; drops=[];
@@ -1060,7 +1322,7 @@ resetBtn.addEventListener('click',()=>{
 
 (function initTitle(){
   const s=loadSave();
-  if(s&&(s.red||s.blue)){
+  if(s&&(s.red||s.blue||s.purple)){
     beginBtn.textContent='Resume the restoration';
     resetBtn.style.display='block';
   }
