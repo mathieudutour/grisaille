@@ -559,19 +559,21 @@ function updateSwatches(dt){
    THE WEAPON — two slots, any color (§8)
    ============================================================ */
 const DELIVERY={
-  grey:  { rate:7,  cost:0 },
-  red:   { rate:10, cost:.012 }, // Brush — rapid stream, short range
-  blue:  { rate:2.3,cost:.035 }, // Roller — arcing lob, splash
-  yellow:{ rate:0,  cost:.006 }, // Quill — hitscan beam, overheats (cost per tick)
-  green: { rate:2.8,cost:.03 },  // Sponge — seeking spores, slow, persistent
-  orange:{ rate:1.8,cost:.04 },  // Bellows — cluster burst, shotgun spread
-  purple:{ rate:3.5,cost:.028 }, // Compass — phase bolt, pierces a line
+  grey:  { rate:7,  cost:0 },    // Stump — the Prologue tool. It never runs out.
+  red:   { rate:10, cost:.008 }, // Brush — rapid stream, short range
+  blue:  { rate:2.3,cost:.028 }, // Roller — arcing lob, splash
+  yellow:{ rate:0,  cost:.005 }, // Quill — hitscan beam, overheats (cost per tick)
+  green: { rate:2.8,cost:.024 }, // Sponge — seeking spores, slow, persistent
+  orange:{ rate:1.8,cost:.03 },  // Bellows — cluster burst, shotgun spread
+  purple:{ rate:3.5,cost:.022 }, // Compass — phase bolt, pierces a line
 };
+const MONO=1.7;                  // mono-colour burst tax on the drain (§8.6)
 function cycleSlot(which){
-  const own=ownedColors();
-  if(own.length<2 || mode==='title') return;
-  const cur=slots[which], i=own.indexOf(cur);
-  slots[which]=own[(i+1)%own.length];
+  // grey stays in the rotation forever — dry is never a dead end
+  const opts=['grey'].concat(ownedColors());
+  if(opts.length<2 || mode==='title') return;
+  const cur=slots[which], i=opts.indexOf(cur);
+  slots[which]=opts[(i+1)%opts.length];
   blip(which==='delivery'?300:380,.06,'sine',.035);
   updateWeaponHud();
 }
@@ -588,7 +590,14 @@ function bulletColor(){
 }
 function fireWeapon(){
   const d=slots.delivery;
-  if(!chargeOk(d)) { blip(90,.05,'square',.015); player.fireT=.25; return; }
+  if(!chargeOk(d)) {
+    blip(90,.05,'square',.015); player.fireT=.25;
+    if(!seen.dry_hint){
+      seen.dry_hint=true; save();
+      showStamp(d,'PIGMENT DRY\nthe stump costs nothing — swap with q', 2800);
+    }
+    return;
+  }
   const spec=DELIVERY[d];
   player.fireT=1/spec.rate;
   const mono = d!=='grey' && d===slots.payload;
@@ -604,14 +613,14 @@ function fireWeapon(){
       sx:player.x, sy:player.y,
       tx:player.x+Math.cos(a)*dist, ty:player.y+Math.sin(a)*dist,
       t:0, T:.62, dmg:mono?5:3, splash:60*swMag('splash_big',1,1.45,1.8), col, mono,
-      dCost:mono?spec.cost*2:spec.cost, pCost:.02, seed:(Math.random()*999)|0 });
+      dCost:mono?spec.cost*MONO:spec.cost, pCost:.015, seed:(Math.random()*999)|0 });
     blip(150,.1,'sine',.03);
   } else if(d==='purple'){
     const a=player.aim+rand(-.03,.03);
     pbullets.push({ kind:'bolt', x:player.x+Math.cos(a)*16, y:player.y+Math.sin(a)*16,
       vx:Math.cos(a)*620, vy:Math.sin(a)*620,
       life:.5, dmg:(mono?2.2:1.3)*swMag('bolt_dmg',1,1.6,2), col, mono, hitList:[],
-      dCost:mono?spec.cost*2:spec.cost, pCost:.01, seed:(Math.random()*999)|0 });
+      dCost:mono?spec.cost*MONO:spec.cost, pCost:.008, seed:(Math.random()*999)|0 });
     blip(500,.07,'sine',.025);
   } else if(d==='green'){
     // Sponge: slow seeking spores, persistent
@@ -623,7 +632,7 @@ function fireWeapon(){
         life:4, dmg:mono?2:1.2, col, mono,
         dCost:0, pCost:0, seed:(Math.random()*999)|0 });
     }
-    const shot={dCost:mono?spec.cost*2:spec.cost, pCost:.018};
+    const shot={dCost:mono?spec.cost*MONO:spec.cost, pCost:.014};
     drainFor(shot);
     blip(220,.1,'sine',.03);
     player.fireT=1/spec.rate;
@@ -639,7 +648,7 @@ function fireWeapon(){
         life:.38, dmg:mono?1.6:1, col, mono, pierce:1, hitList:[],
         dCost:0, pCost:0, seed:(Math.random()*999)|0 });
     }
-    const shot={dCost:mono?spec.cost*2:spec.cost, pCost:.02};
+    const shot={dCost:mono?spec.cost*MONO:spec.cost, pCost:.015};
     drainFor(shot);
     blip(120,.12,'sawtooth',.035);
     player.fireT=1/spec.rate;
@@ -652,7 +661,7 @@ function fireWeapon(){
     pbullets.push({ kind:'dab', x:player.x+Math.cos(a)*16, y:player.y+Math.sin(a)*16,
       vx:Math.cos(a)*(d==='red'?460:430), vy:Math.sin(a)*(d==='red'?460:430),
       life, dmg:mono?1.7:1, col, mono, pierce, hitList:[],
-      dCost:mono?spec.cost*2:spec.cost, pCost:.008, seed:(Math.random()*999)|0 });
+      dCost:mono?spec.cost*MONO:spec.cost, pCost:.005, seed:(Math.random()*999)|0 });
     blip(d==='grey'?240:330,.05,'square',.02);
   }
   drainFor(pbullets[pbullets.length-1]);
@@ -685,7 +694,7 @@ function quill(dt){
   }
   player.heat=Math.min(1, player.heat+.07*swMag('quill_cool',1,.55,.35));
   if(player.heat>=1){ player.overheated=true; blip(70,.4,'sawtooth',.04); }
-  const cost=mono?DELIVERY.yellow.cost*2:DELIVERY.yellow.cost;
+  const cost=mono?DELIVERY.yellow.cost*MONO:DELIVERY.yellow.cost;
   player.charge.yellow=Math.max(0,player.charge.yellow-cost);
   if(slots.payload!=='grey'&&slots.payload!=='yellow'&&chargeOk(slots.payload))
     player.charge[slots.payload]=Math.max(0,player.charge[slots.payload]-.004);
@@ -793,7 +802,7 @@ function killEnemy(e){
   if(e.faction!=='grey' && lib[e.faction].on){
     for(let i=0;i<3;i++)
       drops.push({x:e.x+rand(-10,10), y:e.y+rand(-10,10), color:e.faction, life:9, seed:i*7+e.seed});
-  } else if(e.faction==='grey' && ownedColors().length && Math.random()<.25){
+  } else if(e.faction==='grey' && ownedColors().length && Math.random()<.45){
     const c=ownedColors()[Math.random()*ownedColors().length|0];
     drops.push({x:e.x, y:e.y, color:c, life:9, seed:e.seed});
   }
@@ -1014,8 +1023,8 @@ function updateWeaponHud(){
   weaponEl.style.display = own.length? 'block':'none';
   if(!own.length) return;
   comboEl.textContent = `${COLORS[slots.delivery].tool} of ${COLORS[slots.payload].payload}`;
-  slotDEl.textContent = COLORS[slots.delivery].warden.toLowerCase();
-  slotPEl.textContent = COLORS[slots.payload].warden.toLowerCase();
+  slotDEl.textContent = slots.delivery==='grey' ? 'stump · free' : COLORS[slots.delivery].warden.toLowerCase();
+  slotPEl.textContent = slots.payload==='grey' ? 'trace · free' : COLORS[slots.payload].warden.toLowerCase();
   slotDEl.style.color = css(tint(slots.delivery));
   slotPEl.style.color = css(tint(slots.payload));
   const swatchLines = swatches.map(s=>{
@@ -1723,8 +1732,12 @@ function update(rdt,t){
   else if(player.overheated) player.heat=Math.max(0,player.heat-.5*dt);
   if(player.overheated && player.heat<.35) player.overheated=false;
   player.beamT=Math.max(0,player.beamT-dt);
-  // slow passive regen — drops are the real economy
-  for(const c of ownedColors()) player.charge[c]=Math.min(1,player.charge[c]+.02*dt);
+  // slow passive regen — drops are the real economy — but the fissures
+  // seep faster when nearly dry, so empty is never a dead stop
+  for(const c of ownedColors()){
+    const r = player.charge[c]<.35 ? .08 : .03;
+    player.charge[c]=Math.min(1,player.charge[c]+r*dt);
+  }
 
   updateSwatches(dt);
   touchThings();
@@ -1985,7 +1998,7 @@ function update(rdt,t){
     if(dist<110){ d.x+=dx/dist*240*dt; d.y+=dy/dist*240*dt; }
     if(dist<player.r+4){
       d.life=0;
-      player.charge[d.color]=Math.min(1,player.charge[d.color]+.08);
+      player.charge[d.color]=Math.min(1,player.charge[d.color]+.1);
       blip(700,.06,'sine',.03);
     }
   }
