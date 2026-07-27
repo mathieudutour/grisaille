@@ -86,7 +86,7 @@ function ownedColors(){ return COLOR_ORDER.filter(c=>lib[c].on); }
 
 const SAVE_KEY='grisaille-save-v1';
 function save(){ try{
-  const s={ res, seen };
+  const s={ res, seen, forms, upg };
   for(const c of COLOR_ORDER) s[c]=lib[c].on;
   localStorage.setItem(SAVE_KEY, JSON.stringify(s));
 }catch(e){} }
@@ -340,6 +340,23 @@ const slots={ delivery:'grey', payload:'grey' };
 let enemies=[], ebullets=[], pbullets=[], drops=[], pulses=[], arcs=[], booms=[], patches=[], shake=0;
 let boss=null, telegraphs=[], rings=[], flashes=[], trickleT=0;
 let hubFolk=[], hitstop=0;
+
+/* Requisition Forms — filed paperwork as a progression currency (§7.7) */
+let forms=0;
+const upg={ stock:0, reserve:0, hp:0, seep:0, haul:0 };
+const UPGRADES=[
+  { id:'stock',   name:'working stock',        desc:'re-shelve with fuller reserves',    max:2, cost:[4,8] },
+  { id:'reserve', name:'deeper fissures',      desc:'+15% pigment capacity per rank',    max:2, cost:[5,10] },
+  { id:'hp',      name:'stable condition',     desc:'+1 abrasion before re-shelving',    max:2, cost:[5,10] },
+  { id:'seep',    name:'capillary seep',       desc:'pigment seeps back 50% faster',     max:1, cost:[6] },
+  { id:'haul',    name:'requisitioned crates', desc:'pigment drops refill 50% more',     max:1, cost:[6] },
+];
+function maxCharge(){ return 1+.15*upg.reserve; }
+function stockFloor(){ return .55+.15*upg.stock; }
+function grantForms(n){
+  forms+=n; save();
+  blip(1318,.05,'square',.02); setTimeout(()=>blip(1568,.05,'square',.02),70);
+}
 let interactable=null;      // the objective in the current room
 let swatchDrops=[];         // the archive's offering (swatches and one relic)
 let swatches=[];            // the per-run build (§7.3)
@@ -413,6 +430,7 @@ const keys={};
 addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
   if(dialogPages && (k===' '||k==='enter')){ advanceDialog(); e.preventDefault(); return; }
+  if(shopOpen && (k==='escape'||k===' '||k==='enter')){ closeShop(); e.preventDefault(); return; }
   keys[k]=true;
   if(k==='q') cycleSlot('delivery');
   if(k==='e') cycleSlot('payload');
@@ -1015,6 +1033,7 @@ ORPIMENT ....... ${lib.yellow.on?'RELEASED — in circulation':'buried (grey)'}
 SCHEELE ........ ${secondaryLine('green')}
 REALGAR ........ ${secondaryLine('orange')}
 TYRIAN ......... ${secondaryLine('purple')}
+REQUISITIONS ... ${forms} form${forms===1?'':'s'} on file
 OBJECTIVE ...... ${objectiveText()}
 RECOMMENDATION . ${player.hits>=player.maxHits-1?'contain':'monitor'}`;
 }
@@ -1040,7 +1059,7 @@ function updateMeters(){
     row.classList.toggle('on', lib[c].on);
     if(lib[c].on){
       const bar=row.querySelector('i');
-      bar.style.width=(player.charge[c]*100)+'%';
+      bar.style.width=(player.charge[c]/maxCharge()*100)+'%';
       bar.style.background=css(tint(c),.8);
     }
   }
@@ -1094,7 +1113,7 @@ function reshelve(){
   formEl.style.display='flex';
   player.hits=0;
   // Working Stock: re-shelving refills every owned color to the floor.
-  for(const c of ownedColors()) player.charge[c]=Math.max(player.charge[c],.55);
+  for(const c of ownedColors()) player.charge[c]=Math.max(player.charge[c],stockFloor());
   swatches=[];                    // the per-run build is forfeit
   player.heat=0; player.overheated=false;
   blip(140,.5,'sine',.06);
@@ -1102,6 +1121,62 @@ function reshelve(){
   enterHub(true);                 // the staff carry Payne back to storage
   updateReport(); updateWeaponHud();
 }
+
+/* ============================================================
+   THE REQUISITIONS DESK — spend the paperwork (§7.7)
+   ============================================================ */
+const shopEl=document.getElementById('shop');
+const shopPaper=document.getElementById('shopPaper');
+let shopOpen=false, deskLock=false;
+const desk={ x:0, y:0, r:30 };
+function placeDesk(){ desk.x=W*.13; desk.y=H*.74; }
+function openShop(){
+  shopOpen=true; renderShop(); shopEl.style.display='flex';
+  blip(392,.1,'sine',.04);
+}
+function closeShop(){
+  shopOpen=false; shopEl.style.display='none';
+  deskLock=true; mouse.down=false;
+  updateReport();
+}
+function renderShop(){
+  let rows='';
+  for(const u of UPGRADES){
+    const rank=upg[u.id], maxed=rank>=u.max;
+    const cost=maxed?null:u.cost[rank];
+    const pips='●'.repeat(rank)+'○'.repeat(u.max-rank);
+    rows+=`<div class="row">
+      <span class="nm">${u.name}</span>
+      <span class="ds">${u.desc}</span>
+      <span class="rk">${pips}</span>
+      <button data-buy="${u.id}" ${maxed||forms<cost?'disabled':''}>
+        ${maxed?'filed':cost+' forms'}</button>
+    </div>`;
+  }
+  shopPaper.innerHTML=
+`<span class="hd">REQUISITIONS — FORM 7-C</span>
+<div class="bal">forms on file: ${forms} · issued against future working stock</div>
+${rows}
+<div class="closer"><button data-close="1">file &amp; return</button></div>`;
+}
+shopEl.addEventListener('click',e=>{
+  const buy=e.target.getAttribute&&e.target.getAttribute('data-buy');
+  if(buy){
+    const u=UPGRADES.find(x=>x.id===buy);
+    const rank=upg[u.id];
+    if(rank<u.max && forms>=u.cost[rank]){
+      forms-=u.cost[rank];
+      upg[u.id]++;
+      if(u.id==='hp'){ player.maxHits=6+upg.hp; }
+      save();
+      blip(660,.12,'sine',.05); blip(880,.16,'sine',.04);
+      renderShop();
+    } else blip(110,.1,'square',.03);
+    return;
+  }
+  if(e.target.getAttribute&&e.target.getAttribute('data-close')) closeShop();
+  if(e.target===shopEl) closeShop();
+});
 
 /* ============================================================
    HUB & RAIDS (§7.5)
@@ -1117,6 +1192,7 @@ function enterHub(fromRaid=false){
   swatches=[]; relics=[];       // the per-run build ends with the run (§7.3, §7.9)
   player.leech=0;
   makeCrates(); makeMotes();
+  placeDesk();
   player.x=W/2; player.y=H*.72;
   if(fromRaid && ownedColors().length){
     // every homecoming tracks pigment in (§3.6) — the hub keeps all of it
@@ -1378,7 +1454,8 @@ function placeObjective(act){
 
 function liberate(color){
   lib[color].on=true;
-  player.charge[color]=1;
+  player.charge[color]=maxCharge();
+  grantForms(3);                // an accession, properly documented
   save();
   if(color==='red'){ slots.delivery='red'; slots.payload='red'; }
   timescale=.22; cineT=1.7;
@@ -1401,8 +1478,12 @@ function liberate(color){
 }
 
 function touchThings(){
-  // hub entrances
+  // hub entrances, and the desk
   if(mode==='hub'){
+    const dd=Math.hypot(player.x-desk.x,player.y-desk.y);
+    if(dd<desk.r+player.r){
+      if(!deskLock && !shopOpen){ openShop(); }
+    } else deskLock=false;
     for(const hd of hubDoors){
       if(Math.hypot(player.x-hd.x,player.y-hd.y)<hd.r+player.r){
         mode='raid'; startRaid(hd.act); return;
@@ -1507,6 +1588,7 @@ function killBoss(){
   raid.state='done';
   timescale=.2; cineT=2;
   shake=.5;
+  grantForms(5);
   showStamp('purple','THE RESTORATION\none colour freed. forever.', 3400);
   blip(523,.6,'sine',.06); blip(659,.8,'sine',.05); blip(784,1,'sine',.05);
   setTimeout(()=>{ if(mode!=='title') showDialog('white_out', STORY.white_out); }, 2800);
@@ -1690,6 +1772,7 @@ function update(rdt,t){
 
   if(mode==='title') return;
   if(dialogPages) return;         // the world holds still while the paperwork speaks
+  if(shopOpen) return;            // and while forms are being filed
   if(reshelving>0){ reshelving-=rdt; return; }
 
   reportT-=rdt; if(reportT<=0){ reportT=.3; updateReport();
@@ -1734,9 +1817,10 @@ function update(rdt,t){
   player.beamT=Math.max(0,player.beamT-dt);
   // slow passive regen — drops are the real economy — but the fissures
   // seep faster when nearly dry, so empty is never a dead stop
+  const seepMul=1+.5*upg.seep;
   for(const c of ownedColors()){
-    const r = player.charge[c]<.35 ? .08 : .03;
-    player.charge[c]=Math.min(1,player.charge[c]+r*dt);
+    const r = (player.charge[c]<.35 ? .08 : .03)*seepMul;
+    player.charge[c]=Math.min(maxCharge(),player.charge[c]+r*dt);
   }
 
   updateSwatches(dt);
@@ -1762,6 +1846,7 @@ function update(rdt,t){
   if(raid && raid.state==='combat' && !enemies.some(e=>!e.dead)){
     raid.state='cleared';
     placeDoors();
+    grantForms(1);              // a processed bay files its own paperwork
     blip(523,.2,'sine',.05); blip(659,.3,'sine',.04);
     updateReport();
   }
@@ -1998,7 +2083,7 @@ function update(rdt,t){
     if(dist<110){ d.x+=dx/dist*240*dt; d.y+=dy/dist*240*dt; }
     if(dist<player.r+4){
       d.life=0;
-      player.charge[d.color]=Math.min(1,player.charge[d.color]+.1);
+      player.charge[d.color]=Math.min(maxCharge(),player.charge[d.color]+.1*(1+.5*upg.haul));
       blip(700,.06,'sine',.03);
     }
   }
@@ -2125,6 +2210,7 @@ function render(t){
   if(mode==='hub'){
     for(const hd of hubDoors) drawEntrance(hd,t);
     for(const f of hubFolk) drawFolk(f,t);
+    drawDesk(t);
   }
   // room fixtures
   if(kiln) drawKiln(t);
@@ -2470,6 +2556,33 @@ function drawInteractable(it,t){
   ctx.fillText(label, it.x, it.y+it.r+24);
 }
 
+function drawDesk(t){
+  const pulse=.5+.5*Math.sin(t*2.2);
+  ctx.beginPath(); ctx.arc(desk.x,desk.y,desk.r+8+pulse*5,0,7);
+  ctx.strokeStyle=css(INK,.12+.12*pulse); ctx.lineWidth=1.2; ctx.stroke();
+  // the desktop
+  ctx.save(); ctx.translate(desk.x,desk.y); ctx.rotate(-.06);
+  ctx.fillStyle='rgba(196,186,164,.9)';
+  ctx.strokeStyle=css(INK,.6); ctx.lineWidth=1.6;
+  ctx.fillRect(-26,-16,52,32); ctx.strokeRect(-26,-16,52,32);
+  // stacked forms
+  ctx.fillStyle='rgba(240,235,222,.95)'; ctx.strokeStyle=css(INK,.4); ctx.lineWidth=.8;
+  ctx.fillRect(-18,-9,16,20); ctx.strokeRect(-18,-9,16,20);
+  ctx.fillRect(-15,-11,16,20); ctx.strokeRect(-15,-11,16,20);
+  // ruled lines on the top form
+  ctx.strokeStyle='rgba(58,53,44,.35)';
+  for(let i=0;i<4;i++){ ctx.beginPath(); ctx.moveTo(-13,-7+i*4+jit(7,i,.3)); ctx.lineTo(-1,-7+i*4+jit(7,i+4,.3)); ctx.stroke(); }
+  // the inkwell
+  ctx.beginPath(); ctx.arc(14,0,4.5,0,7);
+  ctx.fillStyle='rgba(38,33,30,.9)'; ctx.fill();
+  ctx.restore();
+  ctx.font='9px "Courier New",monospace'; ctx.textAlign='center';
+  ctx.fillStyle='rgba(58,53,44,.6)';
+  ctx.fillText('REQUISITIONS', desk.x, desk.y+desk.r+16);
+  ctx.fillStyle='rgba(58,53,44,.4)';
+  ctx.fillText(`${forms} on file`, desk.x, desk.y+desk.r+28);
+}
+
 function drawEntrance(hd,t){
   const col = hd.act==='endless' ? COLORS.grey.live
             : hd.act==='white' ? [246,243,235]
@@ -2658,6 +2771,9 @@ function applySaveToWorld(s){
   if(s.red){ slots.delivery='red'; slots.payload='red'; }
   if(s.res) for(const sec in res) res[sec]=s.res[sec]||0;
   else if(typeof s.resonance==='number') res.purple=s.resonance;   // pre-kilns save
+  if(typeof s.forms==='number') forms=s.forms;
+  else forms = 3*ownedColors().length + (s.seen&&s.seen.white_out?5:0);   // retroactive credit
+  if(s.upg) Object.assign(upg, s.upg);
   if(s.seen) Object.assign(seen, s.seen);
   else {
     // an older save: don't replay beats the player already lived through
@@ -2675,7 +2791,8 @@ function startGame(){
   titleEl.style.display='none';
   applySaveToWorld(loadSave());
   player.hits=0;
-  for(const c of ownedColors()) player.charge[c]=1;
+  player.maxHits=6+upg.hp;
+  for(const c of ownedColors()) player.charge[c]=maxCharge();
   enterHub();
   updateWeaponHud();
   blip(392,.2,'sine',.04);

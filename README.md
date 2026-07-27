@@ -59,6 +59,11 @@ itself; each Warden introduced by their report and their own argument — they a
 colors exist, an interdepartmental memo from the desk of L. Hargreaves, archive staff, A-17.
 Each document shows once per save, and the world holds still while the paperwork speaks.
 
+**Requisition Forms (§7.7):** filed paperwork as the meta-currency — earned for every
+processed bay (+1), every accession (+3), and the archivist himself (+5). Spend them at
+the hub's **Requisitions Desk** (Form 7-C): working stock, deeper fissures (+capacity),
+stable condition (+HP), capillary seep, requisitioned crates.
+
 **Relics (§7.9):** every archive may also hold one piece of stationery or lab equipment —
 pigment vial (+damage for one color), catalogue leaf (routes always labelled), humidity
 gauge (fugitive swatches fade slower), crate seal (a fourth swatch on offer), conservator's
