@@ -305,6 +305,7 @@ const fissures=[];
 const slots={ delivery:'grey', payload:'grey' };
 
 let enemies=[], ebullets=[], pbullets=[], drops=[], pulses=[], arcs=[], booms=[], patches=[], shake=0;
+let boss=null, telegraphs=[], rings=[], flashes=[], trickleT=0;
 let interactable=null;      // the objective in the current room
 let swatchDrops=[];         // the archive's offering (swatches and one relic)
 let swatches=[];            // the per-run build (§7.3)
@@ -643,6 +644,11 @@ function quill(dt){
       hitEnemy(e,{kind:'ray', dmg, x:px, y:py});
     }
   }
+  if(boss){
+    const t=Math.max(0,Math.min(1,((boss.x-x1)*(x2-x1)+(boss.y-y1)*(y2-y1))/(len*len)));
+    const px=x1+(x2-x1)*t, py=y1+(y2-y1)*t;
+    if(Math.hypot(boss.x-px,boss.y-py)<boss.r) hitBoss({kind:'ray', dmg, x:px, y:py});
+  }
   player.heat=Math.min(1, player.heat+.07*swMag('quill_cool',1,.55,.35));
   if(player.heat>=1){ player.overheated=true; blip(70,.4,'sawtooth',.04); }
   const cost=mono?DELIVERY.yellow.cost*2:DELIVERY.yellow.cost;
@@ -836,7 +842,18 @@ const STORY={
     {hd:'INTERDEPARTMENTAL MEMO — A-17', body:
 'FROM ........... L. Hargreaves, archive staff\nRE ............. object 88-19-P, “Payne”\n\nThe object has de-accessioned six colours and manufactured three that were never in the collection. This is not restoration. It is contamination.\n\nI was not angry when I took the colours, and I am not angry now. I simply note that every war we will now have again was, at one point, filed safely in a drawer.\n\nI have completed the appropriate paperwork.'},
     {hd:'CONDITION REPORT — 88-19-P', body:
-'OBJECT ......... figure, compacted pigment\nCONDITION ...... cracked throughout. leaking colour.\nSTABILITY ...... none. fugitive.\nRECOMMENDATION . contain.\n\n— L.H.'},
+'OBJECT ......... figure, compacted pigment\nCONDITION ...... cracked throughout. leaking colour.\nSTABILITY ...... none. fugitive.\nRECOMMENDATION . contain.\n\nHe is waiting in the central catalogue.\n\n— L.H.'},
+  ],
+  white_intro:[
+    {body:'The central catalogue is the best-lit room in the archive.\n\nAn elderly man stands in the aisle in a plain lab coat and cotton gloves, holding a clipboard. His badge reads ARCHIVE STAFF, A-17.\n\nHe is somehow brighter than the room. Not pale — overexposed. The white that covers everything beneath it.'},
+    {quote:true,body:'Ah. 88-19-P. Thank you for coming — it saves a retrieval order.\n\nYou are the largest conservation problem I have ever been assigned, and I have catalogued wars. Please hold still.'},
+    {quote:true,body:'I want you to understand that I am not angry. I was never angry. Anger is a red property, and I filed red.\n\nEverything you have loosed, I will simply take back into care. Including you. Especially you.\n\nYou will find I already know your equipment. I processed all of it.'},
+  ],
+  white_out:[
+    {quote:true,body:'…note for file. Containment — failed.\n\nThe colours are loose, then. All of them, forever, in everyone’s hands.\n\nIt will be used badly. You know it will. Somewhere it has already started. I was never wrong about the cost — write that down somewhere, if anything is still written down.'},
+    {body:'He is right. He was always right about the cost.\n\nYou release them anyway — because what subtraction can only protect, synthesis makes more of. That is the whole argument, and you have finished making it.'},
+    {hd:'CONDITION REPORT — FINAL', body:
+'OBJECT ......... world\nCONDITION ...... cracked throughout.\n                 colours — fugitive. unstable.\n                 in circulation.\nRECOMMENDATION . none.\n\nOne colour freed. Forever.'},
   ],
 };
 
@@ -896,6 +913,7 @@ const ACT_LABEL={
   yellow:'THE BURIED VAULT',
   purple:'KILN — TYRIAN', green:"KILN — SCHEELE'S GREEN", orange:'KILN — REALGAR',
   endless:'THE PROCESSING FLOORS',
+  white:'THE CENTRAL CATALOGUE',
 };
 function unfiredSecondaries(){ return Object.keys(SECONDARIES).filter(s=>!lib[s].on); }
 function objectiveText(){
@@ -911,7 +929,8 @@ function objectiveText(){
       const [p1,p2]=SECONDARIES[next].parents;
       return `fire mixed ${p1}+${p2} pigment — resonance ${res[next]}/${RES_MAX}`;
     }
-    return `restoration ongoing — ${killsTotal} accessions struck`;
+    if(seen.white_out) return 'the restoration is complete. the world is loose.';
+    return 'a memo waits in the central catalogue.';
   }
   if(!raid) return 'awaiting accession';
   const alive=enemies.filter(e=>!e.dead).length;
@@ -928,7 +947,8 @@ function objectiveText(){
       return bay;
     case 'firing':  return `HOLD THE MIX — kiln at ${Math.round(kilnTemp*100)}%`;
     case 'birth':   return `the first ${raid.act} things. survive your creation.`;
-    case 'done':    return 'accession complete. returning to storage.';
+    case 'boss':    return 'the archivist is filing you. do not hold still.';
+    case 'done':    return raid.act==='white' ? 'the restoration.' : 'accession complete. returning to storage.';
   }
   return 'awaiting accession';
 }
@@ -996,6 +1016,14 @@ function updateMeters(){
     bar.style.width=(kilnTemp*100)+'%';
     bar.style.background=css(COLORS.purple.live,.85);
   }
+  const bossRow=document.querySelector('#meterBoss');
+  const showBoss = !!(boss && raid && raid.state==='boss');
+  bossRow.classList.toggle('on', showBoss);
+  if(showBoss){
+    const bar=bossRow.querySelector('i');
+    bar.style.width=(boss.hp/boss.maxHp*100)+'%';
+    bar.style.background='rgba(58,53,44,.75)';
+  }
   const showHeat = slots.delivery==='yellow';
   heatWrap.style.display = showHeat?'block':'none';
   if(showHeat){
@@ -1035,6 +1063,7 @@ function reshelve(){
    ============================================================ */
 function clearField(){
   enemies=[]; ebullets=[]; pbullets=[]; drops=[]; pulses=[]; arcs=[]; booms=[]; patches=[];
+  boss=null; telegraphs=[]; rings=[]; flashes=[]; trickleT=0;
   interactable=null; doors=[]; kiln=null; swatchDrops=[];
 }
 function enterHub(){
@@ -1054,6 +1083,8 @@ function buildHub(){
   else if(!lib.blue.on) acts.push('blue');
   else if(!lib.yellow.on) acts.push('yellow');
   else {
+    // all six colours exist — the catalogue is waiting (Act IV)
+    if(ownedColors().length===COLOR_ORDER.length) acts.push('white');
     acts.push('endless');
     for(const sec of unfiredSecondaries())
       if(res[sec]>=RES_MAX) acts.push(sec);
@@ -1093,6 +1124,15 @@ function kilnRaidPlan(sec,room){
 }
 function roomPlan(act,room){
   const small=W<700, s=small?-1:0;
+  if(act==='white'){
+    // the approach to the catalogue: he holds everything, so everything is here
+    return [
+      {type:'combat', set:{plaster:3,husk:1,shard:2,strata:2,spine:2}},
+      {type:'combat', set:{shard:2,strata:2,spine:2,burst:2,damask:1,spiral:2}},
+      {type:'archive'},
+      {type:'boss'},
+    ][room]||null;
+  }
   if(act==='endless'){
     // the branching route decided this room's plan (§7.5)
     if(raid.nextPlan){ const p=raid.nextPlan; raid.nextPlan=null; return p; }
@@ -1131,6 +1171,10 @@ function loadRoom(){
   } else if(plan.type==='objective'){
     raid.state='objective';
     placeObjective(raid.act);
+  } else if(plan.type==='boss'){
+    raid.state='boss';
+    spawnBoss();
+    showDialog('white_intro', STORY.white_intro);
   }
   updateReport();
 }
@@ -1289,8 +1333,221 @@ function birthPhase(){
 }
 
 /* ============================================================
-   UPDATE
+   ACT IV — L. HARGREAVES, ARCHIVE STAFF, A-17 (§2.5, §11.5)
+   The mirror: he reads the player's two slots and files them.
+   After a short processing delay his attack pattern *is* the
+   player's current delivery, tinted with their current mix —
+   and he resists whatever he is currently holding, so staying
+   one swap ahead of his paperwork is the whole fight.
    ============================================================ */
+function spawnBoss(){
+  boss={ x:W*.7, y:H/2, r:20, hp:130, maxHp:130,
+    mirror:{delivery:slots.delivery, payload:slots.payload},
+    readT:0, atkT:3, phase:1, walk:rand(0,7),
+    burn:0, chill:0, hurt:0, ringT:5 };
+  trickleT=8;
+}
+function bossDelay(){ return boss.phase===1?1.4 : boss.phase===2?.7 : .45; }
+function bossCooldown(){ return (boss.phase===1?1 : boss.phase===2?.8 : .65); }
+function bossMult(){
+  let m=1;
+  if(boss.mirror.delivery===slots.delivery) m*=.5;
+  if(boss.mirror.payload===slots.payload && slots.payload!=='grey') m*=.5;
+  const vial=relic('pigment_vial');
+  if(vial && (slots.delivery===vial.vialColor || slots.payload===vial.vialColor)) m*=1.3;
+  return m;
+}
+function hitBoss(b){
+  if(!boss || !raid || raid.state!=='boss') return;
+  const dmg=b.dmg*bossMult();
+  boss.hp-=dmg; boss.hurt=1;
+  if(slots.payload==='red'&&chargeOk('red')) boss.burn=Math.max(boss.burn,2);
+  if(slots.payload==='blue'&&chargeOk('blue')) boss.chill=Math.min(5,boss.chill+1);
+  splat(b.x,b.y,stainTint(slots.payload!=='grey'?slots.payload:slots.delivery),4,.08);
+  blip(bossMult()<1?240:400,.04,'triangle',.02);
+  if(boss.hp<=0) killBoss();
+}
+function killBoss(){
+  // the colours come loose where he falls
+  for(const c of COLOR_ORDER) splat(boss.x+rand(-30,30),boss.y+rand(-30,30),stainTint(c),18,.16);
+  splat(boss.x,boss.y,[240,236,226],30,.3);      // and the white settles out of him
+  boss=null; telegraphs=[]; rings=[];
+  ebullets=[];
+  raid.state='done';
+  timescale=.2; cineT=2;
+  shake=.5;
+  showStamp('purple','THE RESTORATION\none colour freed. forever.', 3400);
+  blip(523,.6,'sine',.06); blip(659,.8,'sine',.05); blip(784,1,'sine',.05);
+  setTimeout(()=>{ if(mode!=='title') showDialog('white_out', STORY.white_out); }, 2800);
+  returnT=4;
+  updateReport();
+}
+function bossMirrorColor(){
+  return mix(tint(boss.mirror.delivery), tint(boss.mirror.payload), .5);
+}
+function bossAttack(){
+  const d=boss.mirror.delivery;
+  const col=bossMirrorColor();
+  const px=player.x, py=player.y;
+  const base=Math.atan2(py-boss.y, px-boss.x);
+  if(d==='grey'){
+    for(let i=-1;i<=1;i++)
+      ebullets.push({x:boss.x,y:boss.y,vx:Math.cos(base+i*.14)*130,vy:Math.sin(base+i*.14)*130,
+        life:6,kind:'dot',rot:0,spin:0,seed:(Math.random()*999)|0});
+    boss.atkT=1.6*bossCooldown();
+  } else if(d==='red'){
+    // the Brush: a raking stream
+    for(let i=0;i<8;i++){
+      const a=base+rand(-.1,.1);
+      ebullets.push({x:boss.x,y:boss.y,vx:Math.cos(a)*215,vy:Math.sin(a)*215,
+        life:3,kind:'bdab',col,rot:a,spin:0,seed:(Math.random()*999)|0,delay:i*.09});
+    }
+    boss.atkT=2.6*bossCooldown();
+  } else if(d==='blue'){
+    // the Roller: a lob you can see coming
+    telegraphs.push({kind:'circle',x:px,y:py,r:72,t:.85,T:.85,col});
+    boss.atkT=2.8*bossCooldown();
+  } else if(d==='yellow'){
+    // the Quill: hold still and be underlined
+    telegraphs.push({kind:'line',x:boss.x,y:boss.y,a:base,len:640,t:.7,T:.7,col});
+    boss.atkT=3*bossCooldown();
+  } else if(d==='green'){
+    // the Sponge: patient spores
+    for(let i=-1;i<=1;i++){
+      const a=base+i*.5;
+      ebullets.push({x:boss.x,y:boss.y,vx:Math.cos(a)*110,vy:Math.sin(a)*110,
+        life:5,kind:'bspore',col,rot:0,spin:0,seed:(Math.random()*999)|0});
+    }
+    boss.atkT=2.7*bossCooldown();
+  } else if(d==='orange'){
+    // the Bellows: a cluster burst
+    for(let i=0;i<6;i++){
+      const a=base+rand(-.45,.45);
+      ebullets.push({x:boss.x,y:boss.y,vx:Math.cos(a)*rand(200,260),vy:Math.sin(a)*rand(200,260),
+        life:1.4,kind:'bfrag',col,rot:a,spin:0,seed:(Math.random()*999)|0});
+    }
+    boss.atkT=2.5*bossCooldown();
+  } else if(d==='purple'){
+    // the Compass: a needle that crosses the whole aisle
+    telegraphs.push({kind:'needle',x:boss.x,y:boss.y,a:base,t:.55,T:.55,col});
+    boss.atkT=2.7*bossCooldown();
+  }
+  blip(300,.06,'square',.02);
+}
+function updateBoss(dt){
+  const b=boss;
+  b.hurt=Math.max(0,b.hurt-dt*4);
+  // status from the player's payloads
+  if(b.burn>0){ b.burn-=dt; b.hp-=1.4*dt; if(b.hp<=0){ killBoss(); return; } }
+  b.chill=Math.max(0,b.chill-dt*.6);
+  const slow=1-.09*b.chill;
+  // phases — he reads faster as his condition worsens
+  const frac=b.hp/b.maxHp;
+  const newPhase = frac>2/3?1 : frac>1/3?2 : 3;
+  if(newPhase!==b.phase){
+    b.phase=newPhase;
+    blip(880,.2,'sine',.04);
+    showStamp('yellow', b.phase===2?'REVISED ASSESSMENT\nhe is reading you faster':'FINAL ASSESSMENT\nhe holds everything', 1800);
+  }
+  // the mirror: file whatever the player is currently holding
+  if(slots.delivery!==b.mirror.delivery || slots.payload!==b.mirror.payload){
+    b.readT-=dt;
+    if(b.readT<=0){
+      b.mirror={delivery:slots.delivery, payload:slots.payload};
+      b.readT=bossDelay();
+      blip(1046,.06,'sine',.025);   // a page turns
+    }
+  } else b.readT=bossDelay();
+  // movement: a calm walk that keeps the aisle between you
+  b.walk+=dt*.7;
+  const dx=player.x-b.x, dy=player.y-b.y, d=Math.hypot(dx,dy)||1;
+  let mx=0,my=0;
+  if(d<240){ mx=-dx/d; my=-dy/d; }
+  else if(d>400){ mx=dx/d; my=dy/d; }
+  mx+= -dy/d*.6*Math.sin(b.walk); my+= dx/d*.6*Math.sin(b.walk);
+  b.x+=mx*42*slow*dt; b.y+=my*42*slow*dt;
+  b.x=Math.max(50,Math.min(W-50,b.x)); b.y=Math.max(50,Math.min(H-50,b.y));
+  // attacks
+  b.atkT-=dt*slow;
+  if(b.atkT<=0) bossAttack();
+  // phase 3: the Whitening itself — expanding bleach rings
+  if(b.phase===3){
+    b.ringT-=dt;
+    if(b.ringT<=0){
+      b.ringT=4;
+      rings.push({x:b.x,y:b.y,r:26,v:160,hit:false});
+      blip(180,.5,'sine',.05);
+    }
+  }
+  // retrieval orders: a trickle of staff, which is also the ammo economy
+  trickleT-=dt;
+  if(trickleT<=0){
+    trickleT=10;
+    if(enemies.filter(e=>!e.dead).length<4){ spawnEnemy('plaster',true); spawnEnemy('plaster',true); }
+  }
+  // telegraphs resolve
+  for(const tg of telegraphs){
+    tg.t-=dt;
+    if(tg.t<=0){
+      if(tg.kind==='circle'){
+        booms.push({x:tg.x,y:tg.y,r:tg.r,t:.25});
+        splat(tg.x,tg.y,[210,206,196],20,.12);
+        if(Math.hypot(player.x-tg.x,player.y-tg.y)<tg.r) hurtPlayer();
+        blip(120,.2,'sawtooth',.04);
+      } else if(tg.kind==='line'){
+        flashes.push({x:tg.x,y:tg.y,a:tg.a,len:tg.len,t:.12,col:tg.col});
+        const t2=Math.max(0,Math.min(1,((player.x-tg.x)*Math.cos(tg.a)+(player.y-tg.y)*Math.sin(tg.a))/tg.len));
+        const lx=tg.x+Math.cos(tg.a)*tg.len*t2, ly=tg.y+Math.sin(tg.a)*tg.len*t2;
+        if(Math.hypot(player.x-lx,player.y-ly)<player.r+5) hurtPlayer();
+        blip(980,.1,'square',.03);
+      } else if(tg.kind==='needle'){
+        ebullets.push({x:tg.x,y:tg.y,vx:Math.cos(tg.a)*480,vy:Math.sin(tg.a)*480,
+          life:2,kind:'bneedle',col:tg.col,rot:tg.a,spin:0,seed:(Math.random()*999)|0});
+        blip(500,.08,'sine',.03);
+      }
+    }
+  }
+  telegraphs=telegraphs.filter(tg=>tg.t>0);
+  // bleach rings pass through the room
+  for(const rg of rings){
+    rg.r+=rg.v*dt;
+    const pd=Math.hypot(player.x-rg.x,player.y-rg.y);
+    if(Math.abs(pd-rg.r)<12 && player.inv<=0){ hurtPlayer(); }
+  }
+  rings=rings.filter(r=>r.r<Math.max(W,H));
+  for(const f of flashes) f.t-=dt;
+  flashes=flashes.filter(f=>f.t>0);
+}
+
+function drawBoss(t){
+  const b=boss;
+  // overexposed — noticeably brighter than the room (§2.5 visual lock)
+  ctx.save();
+  ctx.globalCompositeOperation='lighter';
+  ctx.beginPath(); ctx.arc(b.x,b.y,b.r*2.4,0,7);
+  ctx.fillStyle='rgba(255,253,246,.16)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(b.x,b.y,b.r*1.4,0,7);
+  ctx.fillStyle='rgba(255,253,246,.14)'; ctx.fill();
+  ctx.restore();
+  const bodyCol = b.hurt>0 ? [255,255,255] : [251,249,243];
+  // the lab coat, seen from above — shoulders and a clipboard
+  watercolor(ctx,(cc,s)=>{ blobPath(cc,b.x,b.y,b.r,10,s+900,.18); },
+    bodyCol,[196,190,178],900,{a1:.85,a2:.5,edgeW:2,lineW:1.2,lineA:.55,mis:1.2});
+  // head
+  ctx.beginPath(); ctx.arc(b.x+jit(901,1,.5), b.y-4+jit(901,2,.5), 6.5,0,7);
+  ctx.fillStyle='rgba(246,242,232,.95)'; ctx.fill();
+  ctx.strokeStyle='rgba(180,174,162,.6)'; ctx.lineWidth=1; ctx.stroke();
+  // the clipboard — the darkest thing about him
+  ctx.save(); ctx.translate(b.x+13,b.y+6); ctx.rotate(.3+jit(902,1,.05));
+  ctx.fillStyle='rgba(70,64,56,.85)'; ctx.fillRect(-5,-7,10,14);
+  ctx.fillStyle='rgba(238,232,218,.9)'; ctx.fillRect(-3.5,-5,7,10);
+  ctx.restore();
+  // the mirror, worn openly: his pen glows with your mix
+  if(b.mirror.delivery!=='grey'||b.mirror.payload!=='grey'){
+    ctx.beginPath(); ctx.arc(b.x+13,b.y+6,3,0,7);
+    ctx.fillStyle=css(bossMirrorColor(),.9); ctx.fill();
+  }
+}
 function update(rdt,t){
   // liberation tint eases on unscaled time, so the world colors *through* the slow-mo
   for(const c of COLOR_ORDER)
@@ -1372,6 +1629,9 @@ function update(rdt,t){
     blip(523,.2,'sine',.05); blip(659,.3,'sine',.04);
     updateReport();
   }
+
+  // -- the archivist
+  if(boss && raid && raid.state==='boss') updateBoss(dt);
 
   // -- enemies
   maintainWaves();
@@ -1518,8 +1778,17 @@ function update(rdt,t){
 
   // -- enemy bullets
   for(const b of ebullets){
+    if(b.delay>0){ b.delay-=dt; continue; }        // a raking stream leaves the brush in order
+    if(b.kind==='bspore'){
+      const a=Math.atan2(player.y-b.y,player.x-b.x);
+      const cur=Math.atan2(b.vy,b.vx);
+      let diff=a-cur; while(diff>Math.PI)diff-=Math.PI*2; while(diff<-Math.PI)diff+=Math.PI*2;
+      const na=cur+Math.sign(diff)*Math.min(Math.abs(diff), 1.8*dt);
+      b.vx=Math.cos(na)*115; b.vy=Math.sin(na)*115;
+    }
     b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt; b.rot+=b.spin*dt;
-    const rr = b.kind==='glob'?7 : b.kind==='dot'?4 : b.kind==='pbolt'?4.5 : b.kind==='sbolt'?3.5 : 4.6;
+    const rr = b.kind==='glob'?7 : b.kind==='dot'?4 : b.kind==='pbolt'?4.5 : b.kind==='sbolt'?3.5
+             : b.kind==='bdab'?4 : b.kind==='bfrag'?3.5 : b.kind==='bspore'?4 : b.kind==='bneedle'?4 : 4.6;
     if(Math.hypot(b.x-player.x,b.y-player.y)<player.r-2+rr*.4){
       b.life=0; hurtPlayer();
     }
@@ -1541,6 +1810,7 @@ function update(rdt,t){
         if(slots.payload==='purple' && chargeOk('purple')) singularity(b.x,b.y);
         for(const e of enemies)
           if(!e.dead && !e.phased && Math.hypot(e.x-b.x,e.y-b.y)<b.splash+e.r) hitEnemy(e,b);
+        if(boss && Math.hypot(boss.x-b.x,boss.y-b.y)<b.splash+boss.r) hitBoss(b);
       } else b.life=1;
       continue;
     }
@@ -1574,6 +1844,12 @@ function update(rdt,t){
           break;
         }
       }
+    }
+    // the archivist is also a target — though he resists what he's holding
+    if(boss && b.life>0 && Math.hypot(b.x-boss.x,b.y-boss.y)<boss.r){
+      if(b.kind==='bolt'){
+        if(!b.hitBossOnce){ b.hitBossOnce=true; hitBoss(b); }
+      } else { b.life=0; hitBoss(b); }
     }
   }
   pbullets=pbullets.filter(b=>b.life>0);
@@ -1721,6 +1997,14 @@ function render(t){
       ctx.fillStyle=css(mix([130,126,112],COLORS.yellow.live,lib.yellow.t), .85); ctx.fill();
       if(lib.yellow.t>.05){ ctx.beginPath(); ctx.arc(0,0,6,0,7);
         ctx.fillStyle=css(COLORS.yellow.live,.14*lib.yellow.t); ctx.fill(); }
+    } else if(b.kind==='bdab'||b.kind==='bfrag'||b.kind==='bneedle'){
+      // his pen writes in your ink
+      const ln = b.kind==='bneedle'?14 : b.kind==='bdab'?8 : 5;
+      ctx.beginPath(); ctx.ellipse(0,0,ln,2.2,Math.atan2(b.vy,b.vx)-b.rot,0,7);
+      ctx.fillStyle=css(b.col,.85); ctx.fill();
+    } else if(b.kind==='bspore'){
+      ctx.beginPath(); ctx.arc(jit(b.seed,1,1.2),jit(b.seed,2,1.2),3.6,0,7);
+      ctx.fillStyle=css(b.col,.8); ctx.fill();
     } else if(b.kind==='pbolt'){
       ctx.beginPath();
       for(let a=0;a<Math.PI*3;a+=.5){
@@ -1749,8 +2033,38 @@ function render(t){
     }
   }
 
+  // the archivist's telegraphs — always legible, that is the point
+  for(const tg of telegraphs){
+    const k=1-tg.t/tg.T;
+    if(tg.kind==='circle'){
+      ctx.beginPath(); ctx.arc(tg.x,tg.y,tg.r,0,7);
+      ctx.strokeStyle=css(tg.col,.25+.35*k); ctx.lineWidth=1.4; ctx.stroke();
+      ctx.beginPath(); ctx.arc(tg.x,tg.y,tg.r*k,0,7);
+      ctx.fillStyle=css(tg.col,.08); ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(tg.x,tg.y);
+      ctx.lineTo(tg.x+Math.cos(tg.a)*(tg.len||640), tg.y+Math.sin(tg.a)*(tg.len||640));
+      ctx.strokeStyle=css(tg.col,.15+.4*k); ctx.lineWidth=tg.kind==='needle'?1:1+3*k; ctx.stroke();
+    }
+  }
+  // beam flashes
+  for(const f of flashes){
+    ctx.beginPath();
+    ctx.moveTo(f.x,f.y); ctx.lineTo(f.x+Math.cos(f.a)*f.len, f.y+Math.sin(f.a)*f.len);
+    ctx.strokeStyle=css(mix(f.col,[255,255,255],.3), f.t/.12*.85); ctx.lineWidth=5; ctx.stroke();
+  }
+  // the Whitening, expanding
+  for(const rg of rings){
+    ctx.beginPath(); ctx.arc(rg.x,rg.y,rg.r,0,7);
+    ctx.strokeStyle='rgba(255,253,246,.75)'; ctx.lineWidth=9; ctx.stroke();
+    ctx.beginPath(); ctx.arc(rg.x,rg.y,rg.r,0,7);
+    ctx.strokeStyle='rgba(58,53,44,.18)'; ctx.lineWidth=1; ctx.stroke();
+  }
+
   // enemies
   for(const e of enemies) drawEnemy(e);
+  if(boss) drawBoss(t);
 
   // the Quill beam
   if(player.beamT>0){
@@ -1996,8 +2310,16 @@ function drawInteractable(it,t){
 }
 
 function drawEntrance(hd,t){
-  const c = hd.act==='endless' ? 'grey' : hd.act;
-  const col = c==='grey' ? COLORS.grey.live : tint(c);
+  const col = hd.act==='endless' ? COLORS.grey.live
+            : hd.act==='white' ? [246,243,235]
+            : tint(hd.act);
+  if(hd.act==='white'){
+    // the catalogue door is overexposed, like its keeper
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    ctx.beginPath(); ctx.arc(hd.x,hd.y,34,0,7);
+    ctx.fillStyle='rgba(255,253,246,.14)'; ctx.fill();
+    ctx.restore();
+  }
   const pulse=.5+.5*Math.sin(hd.pulse*2);
   // the doorway: two jambs and a lintel
   ctx.strokeStyle=css(INK,.7); ctx.lineWidth=2.2;
