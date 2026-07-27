@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GRISAILLE</title>
+<meta name="description" content="Color was taken. Make it again. A twin-stick roguelite about liberating color.">
+<style>
+  :root{
+    --paper:#e9e2d3; --ink:#3a352c; --faint:#8d8578; --red:#8a2f22; --blue:#2c5187;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--paper);
+    font-family:"Courier New",Courier,monospace;color:var(--ink);
+    -webkit-user-select:none;user-select:none;touch-action:none}
+  canvas{display:block;width:100vw;height:100vh}
+
+  /* Condition report, top-left */
+  #report{position:fixed;top:14px;left:16px;font-size:11px;line-height:1.7;
+    letter-spacing:.04em;pointer-events:none;white-space:pre;opacity:.85}
+  #report .hd{font-weight:bold;border-bottom:1px solid var(--ink);display:inline-block;
+    padding-bottom:1px;margin-bottom:3px}
+
+  /* Charge meters, top-right — requisitioned stock */
+  #meters{position:fixed;top:16px;right:16px;font-size:10px;letter-spacing:.08em;
+    pointer-events:none;text-align:right}
+  #meters .row{margin-bottom:6px;display:none}
+  #meters .row.on{display:block}
+  #meters .lbl{margin-right:8px;vertical-align:middle}
+  #meters .vial{display:inline-block;width:86px;height:9px;border:1px solid var(--ink);
+    vertical-align:middle;background:transparent;position:relative}
+  #meters .vial i{position:absolute;left:0;top:0;bottom:0;display:block}
+
+  /* Weapon slots, bottom-right */
+  #weapon{position:fixed;bottom:14px;right:16px;font-size:10px;letter-spacing:.08em;
+    text-align:right;pointer-events:none;line-height:1.9;display:none}
+  #weapon .combo{font-size:12px;font-weight:bold;letter-spacing:.12em}
+  #weapon .slot b{display:inline-block;min-width:88px;border-bottom:1px solid var(--faint);
+    text-align:left;padding-left:4px}
+
+  /* Controls hint, bottom-left */
+  #hint{position:fixed;bottom:12px;left:16px;font-size:10px;letter-spacing:.05em;
+    color:var(--faint);pointer-events:none}
+
+  /* Liberation stamp */
+  #stamp{position:fixed;top:38%;left:50%;transform:translate(-50%,-50%) rotate(-2deg) scale(1.6);
+    font-size:17px;letter-spacing:.2em;text-transform:uppercase;text-align:center;
+    padding:14px 30px;border:3px solid var(--red);color:var(--red);border-radius:4px;
+    white-space:pre;line-height:2;opacity:0;pointer-events:none;
+    transition:opacity .3s ease,transform .45s cubic-bezier(.2,1.6,.4,1)}
+  #stamp.show{opacity:.95;transform:translate(-50%,-50%) rotate(-2deg) scale(1)}
+  #stamp.blue{border-color:var(--blue);color:var(--blue)}
+
+  /* Re-shelving form overlay */
+  #form{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(233,226,211,.55);pointer-events:none}
+  #form .paper{background:var(--paper);border:1px solid var(--ink);padding:22px 30px;
+    font-size:12px;line-height:2;white-space:pre;transform:rotate(.6deg);
+    box-shadow:3px 4px 0 rgba(58,53,44,.15)}
+  #form .paper b{border-bottom:1px solid var(--ink)}
+
+  /* Title — the accession card */
+  #title{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;background:rgba(233,226,211,.92);text-align:center;z-index:10}
+  #title h1{font-size:clamp(34px,8vw,64px);letter-spacing:.28em;font-weight:bold;
+    margin-bottom:8px;text-indent:.28em}
+  #title .sub{font-size:12px;letter-spacing:.22em;margin-bottom:38px;color:var(--faint);
+    text-transform:uppercase}
+  #title button{font-family:inherit;font-size:13px;letter-spacing:.14em;padding:12px 26px;
+    background:transparent;color:var(--red);border:2px solid var(--red);border-radius:3px;
+    cursor:pointer;text-transform:uppercase;transform:rotate(-1.2deg);opacity:.92}
+  #title button:active{transform:rotate(-1.2deg) scale(.96)}
+  #title .ctl{margin-top:34px;font-size:10px;line-height:2;letter-spacing:.06em;color:var(--faint)}
+  #title .reset{margin-top:16px;font-size:10px;letter-spacing:.08em;color:var(--faint);
+    text-decoration:underline;cursor:pointer;background:none;border:none;padding:4px;
+    transform:none;text-transform:none;opacity:.8}
+
+  /* Touch swap buttons */
+  .tbtn{position:fixed;right:14px;width:74px;padding:10px 0;font-family:inherit;
+    font-size:9px;letter-spacing:.1em;text-transform:uppercase;background:rgba(233,226,211,.6);
+    color:var(--ink);border:1.5px solid var(--ink);border-radius:3px;display:none;z-index:5}
+  #btnD{bottom:150px} #btnP{bottom:104px}
+  body.touch #btnD, body.touch #btnP{display:block}
+  body.touch #weapon{bottom:200px}
+  body.touch #hint{display:none}
+
+  @media (max-width:700px){
+    #report{font-size:9px;line-height:1.6}
+    #hint{display:none}
+    #meters .vial{width:56px}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="report"></div>
+<div id="meters">
+  <div class="row" id="meterRed"><span class="lbl">VERMILION</span><span class="vial"><i></i></span></div>
+  <div class="row" id="meterBlue"><span class="lbl">ULTRAMARINE</span><span class="vial"><i></i></span></div>
+</div>
+<div id="weapon">
+  <div class="combo" id="comboName"></div>
+  <div class="slot">q · delivery <b id="slotD"></b></div>
+  <div class="slot">e · payload&nbsp; <b id="slotP"></b></div>
+</div>
+<div id="hint">wasd — move · mouse — aim · hold click — fire · space — dash · q/e — swap colors<br>touch: left half — move · right half — aim &amp; fire</div>
+<div id="stamp"></div>
+<div id="form"><div class="paper" id="formText"></div></div>
+<button class="tbtn" id="btnD">delivery</button>
+<button class="tbtn" id="btnP">payload</button>
+
+<div id="title">
+  <h1>GRISAILLE</h1>
+  <div class="sub">color was taken. make it again.</div>
+  <button id="begin">Begin the inventory</button>
+  <div class="ctl">wasd / arrows — move &nbsp;·&nbsp; mouse — aim &nbsp;·&nbsp; hold click — fire<br>
+  space — dash &nbsp;·&nbsp; q / e — swap delivery / payload<br>
+  touch: left half — move &nbsp;·&nbsp; right half — aim &amp; fire</div>
+  <button class="reset" id="reset" style="display:none">file a fresh inventory (reset progress)</button>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
