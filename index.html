@@ -59,6 +59,19 @@
   #stamp.green{border-color:#4a6b32;color:#4a6b32}
   #stamp.orange{border-color:#9a5a14;color:#9a5a14}
 
+  /* Story dialogs — the paperwork speaks */
+  #dialog{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(233,226,211,.6);z-index:8;cursor:pointer}
+  #dialog .paper{background:var(--paper);border:1px solid var(--ink);padding:26px 34px 20px;
+    max-width:min(540px,86vw);font-size:12px;line-height:1.95;letter-spacing:.02em;
+    transform:rotate(-.4deg);box-shadow:3px 4px 0 rgba(58,53,44,.15)}
+  #dialog .paper .hd{font-weight:bold;border-bottom:1px solid var(--ink);display:inline-block;
+    padding-bottom:2px;margin-bottom:12px;letter-spacing:.08em}
+  #dialog .paper .body{white-space:pre-wrap}
+  #dialog .paper .quote{border-left:3px solid var(--ink);padding-left:14px;font-style:italic}
+  #dialog .cont{margin-top:16px;font-size:9px;color:var(--faint);letter-spacing:.14em;
+    text-transform:uppercase;text-align:right}
+
   /* Re-shelving form overlay */
   #form{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
     background:rgba(233,226,211,.55);pointer-events:none}
@@ -125,6 +138,7 @@
 <div id="hint">wasd — move · mouse — aim · hold click — fire · space — dash · q/e — swap colors<br>touch: left half — move · right half — aim &amp; fire</div>
 <div id="stamp"></div>
 <div id="form"><div class="paper" id="formText"></div></div>
+<div id="dialog"><div class="paper" id="dialogPaper"></div></div>
 <button class="tbtn" id="btnD">delivery</button>
 <button class="tbtn" id="btnP">payload</button>
 
