@@ -36,6 +36,15 @@ back to the hub, colors kept, swatches and excess pigment forfeit.
   that run at you and explode. Six colors → **the full 36-weapon grid**: Sponge (seeking
   spores) × Leech (heal + hazard pools), Bellows (cluster burst) × Detonate (blast +
   knockback), Compass (phase bolt) × Singularity (crowd vacuum), and every cross-mix.
+- **Act IV — The Restoration (§2.5, §11.5).** With all six colors loose, the **Central
+  Catalogue** opens: L. Hargreaves, archive staff, A-17 — an elderly conservator in a lab
+  coat, noticeably more overexposed than the room. **The mirror fight:** he reads your two
+  slots and, after a filing delay, his attack pattern *is* your current delivery, tinted
+  with your mix — and he resists whatever he's currently holding, so staying one swap ahead
+  of his paperwork is the whole fight. He reads faster as his condition worsens; at the end
+  he holds everything, and the Whitening itself expands from him in bleach rings. The ending
+  is authored, and it is release (§2.6) — closing on a final condition report filed on the
+  world. RECOMMENDATION: none.
 - **The Processing Floors (endless).** Escalating bays with a **branching route map** (§7.5):
   cleared bays open onto labelled routes — VERMILION BAY, ARCHIVE, an occasional SEALED BAY —
   so routing *is* the cross-harvest decision: pick the bay that grows the pigment you lack.
